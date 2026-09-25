@@ -204,6 +204,34 @@ test('unlocking selects the requested profile and rejects unknown or unsafe ones
   });
 });
 
+test('session endpoints refuse a caller-selected profile without touching the other vault', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    const id = filled.vault.entries[0].id;
+    const entry = { type: 'account' as const, name: '篡改尝试', username: '', address: '', port: '', password: 'y', apiKey: '', secret: '', notes: '' };
+    const revision = filled.vault.revision;
+
+    const attempts: [string, 'POST' | 'PUT' | 'DELETE', string, Record<string, unknown>][] = [
+      ['新增条目', 'POST', '/api/entries', { entry, revision, profile: null }],
+      ['编辑条目', 'PUT', `/api/entries/${id}`, { entry, revision, profile: '默认' }],
+      ['删除条目', 'DELETE', `/api/entries/${id}`, { revision, profile: '默认' }],
+      ['保存设置', 'PUT', '/api/settings', { autoLockMinutes: 15, revision, profile: '默认' }],
+      ['修改主密码', 'POST', '/api/master-password', { currentPassword: OTHER, newPassword: '新的身份档口令-2026', confirmPassword: '新的身份档口令-2026', revision, profile: '默认' }],
+      ['迁移存储', 'POST', '/api/storage-location', { directory: fixture.directory, storagePath: fixture.storagePath, revision, confirmed: true, profile: '默认' }],
+    ];
+    for (const [label, method, path, body] of attempts) {
+      failure(await fixture.api(method, path, { token: work.token, body }), 400, 'INVALID_INPUT');
+      assert.equal(await readVault(fixture.storagePath), defaultSource, `${label} must not touch the default vault`);
+    }
+    assert.deepEqual(success<VaultResponse>(await fixture.api('GET', '/api/vault', { token: work.token })).vault.entries
+      .map(entryItem => entryItem.name), ['工作档的条目']);
+  });
+});
+
 test('profile names collide case-insensitively and the profile count is capped', async () => {
   await withVault(async fixture => {
     await enter(fixture, '工作');

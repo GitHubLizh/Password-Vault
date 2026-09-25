@@ -44,6 +44,13 @@ function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
+// The session, not the caller, decides which profile a mutation touches.
+function rejectProfileSelector(input: Record<string, unknown>): void {
+  if (input.profile !== undefined || input.profiles !== undefined) {
+    throw new VaultError(400, 'INVALID_INPUT', '身份档由当前会话决定，请求不能指定要操作哪个档。');
+  }
+}
+
 export class VaultService {
   // Storage root, as opposed to the current profile's directory (equal until profiles exist).
   get rootDirectory(): string { return this.location.directory; }
@@ -327,6 +334,7 @@ export class VaultService {
   async changeMasterPassword(token: string | undefined, body: unknown): Promise<ChangeMasterPasswordResponse> {
     const session = this.requireSession(token);
     const input = validate.record(body);
+    rejectProfileSelector(input);
     this.checkRevision(session, input.revision);
     const currentPassword = validate.password(input.currentPassword);
     const newPassword = validate.password(input.newPassword, true);
@@ -399,6 +407,7 @@ export class VaultService {
   async saveEntry(token: string | undefined, body: unknown, id?: string): Promise<VaultResponse> {
     const session = this.requireSession(token);
     const input = validate.record(body);
+    rejectProfileSelector(input);
     this.checkRevision(session, input.revision);
     const entry = validate.entryInput(input.entry);
     const next = structuredClone(session.vault);
@@ -417,7 +426,9 @@ export class VaultService {
 
   async deleteEntry(token: string | undefined, body: unknown, id: string): Promise<VaultResponse> {
     const session = this.requireSession(token);
-    this.checkRevision(session, validate.record(body).revision);
+    const input = validate.record(body);
+    rejectProfileSelector(input);
+    this.checkRevision(session, input.revision);
     if (!session.vault.entries.some(item => item.id === id)) throw new VaultError(404, 'NOT_FOUND', '条目不存在。');
     const next = structuredClone(session.vault);
     next.entries = next.entries.filter(item => item.id !== id);
@@ -428,6 +439,7 @@ export class VaultService {
   async settings(token: string | undefined, body: unknown): Promise<VaultResponse> {
     const session = this.requireSession(token);
     const input = validate.record(body);
+    rejectProfileSelector(input);
     this.checkRevision(session, input.revision);
     const next = structuredClone(session.vault);
     next.settings.autoLockMinutes = validate.autoLockMinutes(input.autoLockMinutes);
@@ -476,6 +488,7 @@ export class VaultService {
   async changeStorageLocation(token: string | undefined, body: unknown): Promise<StorageLocationResponse> {
     const session = this.requireSession(token);
     const input = validate.record(body);
+    rejectProfileSelector(input);
     this.checkRevision(session, input.revision);
     if (input.confirmed !== true || input.storagePath !== this.rootStoragePath) {
       throw new VaultError(400, 'INVALID_INPUT', '请核对当前存储位置并确认迁移。');

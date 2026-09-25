@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { VaultError } from './errors.js';
+import { listProfileIds } from './profile-store.js';
 
 export function storageDirectory(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 4096 || /[\x00-\x1f]/.test(value)) {
@@ -66,10 +67,9 @@ export class StorageLocation {
       throw new VaultError(500, 'CONFIG_INVALID', '存储目录配置已损坏，请检查 storage-location.json；为避免打开旧库，不会自动回退。');
     }
     try {
-      const info = await stat(join(location.directory, 'vault.pvlt'));
-      if (!info.isFile()) throw new Error('Not a file');
+      await location.assertDirectoryUsable();
     } catch {
-      throw new VaultError(500, 'LOCATION_UNAVAILABLE', '自定义目录中的密码库不可访问，请连接对应磁盘并检查文件和权限；不会自动创建空库或回退到旧库。');
+      throw new VaultError(500, 'LOCATION_UNAVAILABLE', '自定义目录中的密码库不可访问，请连接对应磁盘并检查目录和权限；不会自动创建空库或回退到旧库。');
     }
     return location;
   }
@@ -87,11 +87,18 @@ export class StorageLocation {
     }
     if (this.source !== null) {
       try {
-        if (!(await stat(join(this.directory, 'vault.pvlt'))).isFile()) throw new Error('Not a file');
+        await this.assertDirectoryUsable();
       } catch {
-        throw new VaultError(503, 'LOCATION_UNAVAILABLE', '自定义目录中的密码库不可访问，请检查磁盘和文件；不会创建空库替代。');
+        throw new VaultError(503, 'LOCATION_UNAVAILABLE', '自定义目录不可访问，请检查磁盘和权限；不会创建空库替代。');
       }
     }
+  }
+
+  // A configured directory must still contain at least one profile vault. An empty directory means the
+  // disk was unplugged or the store was moved away, and must never be mistaken for a fresh start.
+  private async assertDirectoryUsable(): Promise<void> {
+    if (!(await stat(this.directory)).isDirectory()) throw new Error('Not a directory');
+    if ((await listProfileIds(this.directory)).length === 0) throw new Error('No profile vault remains');
   }
 
   async save(directory: string): Promise<void> {

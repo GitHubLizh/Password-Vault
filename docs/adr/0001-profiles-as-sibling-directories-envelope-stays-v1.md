@@ -9,4 +9,4 @@
 - 身份档的存在性以磁盘为准（`vault.pvlt` 在不在），配置只存默认档的显示名；配置损坏不会藏掉任何数据。
 - 非默认档的名字即目录名，因此建档后不可改名——改名要移动磁盘对象，风险大于收益。
 - 全局仍只有一个会话：切档隐含先锁定，服务端单 `session` 字段与每请求的指纹校验语义基本保留。
-- `StorageLocation` 原本在启动和每次请求时都硬验 `vault.pvlt` 必须存在（`server/storage-location.ts:61-66, 81-87`），改为只保证目录可用，否则"删掉已解锁的档"会让服务重启不了。
+- `StorageLocation` 原本在启动和每次请求时都硬验 `<目录>/vault.pvlt` 必须存在（`server/storage-location.ts`），改为硬验**这棵目录里至少还有一个身份档**。守卫本身不能放宽：既有用例 `losing the selected vault while running locks the session and never creates a replacement` 依赖它阻止"盘没插上被误当成全新库、顺手建出空库"。只放宽到"不限定必须是根目录那一个"，才能支持只建了非默认档的库。

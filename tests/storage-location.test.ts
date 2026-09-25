@@ -553,7 +553,7 @@ test('invalid or unavailable saved locations reject startup instead of falling b
       ['unsupported config version', JSON.stringify({ version: 2, directory: fixture.profile }), 'CONFIG_INVALID'],
       ['relative saved path', JSON.stringify({ version: 1, directory: 'relative-vault' }), 'CONFIG_INVALID'],
       ['missing selected directory', JSON.stringify({ version: 1, directory: missingDirectory }), 'LOCATION_UNAVAILABLE'],
-      ['missing selected vault', JSON.stringify({ version: 1, directory: emptyDirectory }), 'LOCATION_UNAVAILABLE'],
+      ['selected directory without any vault', JSON.stringify({ version: 1, directory: emptyDirectory }), 'LOCATION_UNAVAILABLE'],
       ['selected vault is not a file', JSON.stringify({ version: 1, directory: nonFileDirectory }), 'LOCATION_UNAVAILABLE'],
     ];
     for (const [name, config, code] of cases) {
@@ -574,6 +574,34 @@ test('invalid or unavailable saved locations reject startup instead of falling b
           await rm(fixture.configPath);
         }
       });
+    }
+  });
+});
+
+// Ticket 006: the guard is about "some vault remains in this store", not "the default vault remains".
+// A store holding only non-default profiles is legitimate and must boot.
+test('a selected directory containing only non-default profiles starts up and reports no default vault', async () => {
+  await withVault(async fixture => {
+    const setup = fixture.open();
+    await create(setup);
+    const original = await readFile(fixture.originalPath);
+    await setup.close();
+    const target = join(fixture.root, 'profiles-only');
+    await mkdir(join(target, '工作'), { recursive: true });
+    await writeFile(join(target, '工作', 'vault.pvlt'), original, { flag: 'wx' });
+    await writeFile(fixture.configPath, JSON.stringify({ version: 1, directory: target }), { flag: 'wx' });
+    const started = fixture.open();
+    try {
+      await started.ready();
+      const status = success<VaultStatus>(await started.api('GET', '/api/status'));
+      assert.equal(status.exists, false, 'the default vault is genuinely absent here');
+      const session = await create(started);
+      assert.ok(/^[A-Za-z0-9_-]{43}$/.test(session.token), 'a default vault may be created alongside the profile');
+      assert.deepEqual((await readdir(target)).sort(), ['vault.pvlt', '工作']);
+      same(await readFile(join(target, '工作', 'vault.pvlt')), original, 'creating the default vault must not touch the profile');
+      same(await readFile(fixture.originalPath), original, 'the abandoned store must stay untouched');
+    } finally {
+      await started.close();
     }
   });
 });

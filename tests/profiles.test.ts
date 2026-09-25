@@ -358,8 +358,7 @@ test('the default profile cannot be deleted', async () => {
   });
 });
 
-test('deleting a profile leaves unrelated files in its directory alone', async () => {
-  await withVault(async fixture => {
+test('deleting a profile leaves unrelated files in its directory alone', async () => {  await withVault(async fixture => {
     await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
     const work = await enter(fixture, '工作');
     await writeFile(join(fixture.directory, '工作', '我的笔记.txt'), '保留', 'utf8');
@@ -367,5 +366,54 @@ test('deleting a profile leaves unrelated files in its directory alone', async (
       token: work.token, body: { name: '工作', confirmed: true, revision: work.vault.revision },
     }));
     assert.deepEqual(await readdir(join(fixture.directory, '工作')), ['我的笔记.txt']);
+  });
+});
+
+test('backup download is named after the current profile', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    const legacy = await fixture.api('GET', '/api/backup', { token: initial.token });
+    assert.equal(String(legacy.headers['content-disposition']), 'attachment; filename="password-vault.pvlt"',
+      'the default profile must keep the historic filename');
+
+    const work = await enter(fixture, '工作');
+    const response = await fixture.api('GET', '/api/backup', { token: work.token });
+    assert.equal(response.statusCode, 200);
+    const header = String(response.headers['content-disposition']);
+    assert.match(header, /filename\*=UTF-8''password-vault-%E5%B7%A5%E4%BD%9C\.pvlt/, 'the UTF-8 form must carry the real name');
+    assert.match(header, /filename="password-vault-__\.pvlt"/, 'the ASCII fallback must stay header-safe');
+  });
+});
+
+test('a pending restore cannot be redirected into another profile', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultBefore = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const short = success<VaultResponse>(await fixture.api('PUT', '/api/settings', {
+      token: work.token, body: { autoLockMinutes: 1, revision: work.vault.revision },
+    }));
+    const filled = await addEntry(fixture, { ...work, vault: short.vault }, '工作档的条目');
+    const backup = String((await fixture.api('GET', '/api/backup', { token: filled.token })).body);
+
+    // A session keeps the expiry it was created with, so re-unlock to get the 1-minute window.
+    const session = success<SessionResponse>(await unlockAttempt(fixture, { profile: '工作', password: OTHER }));
+    fixture.advance(50000);
+    const preview = success<RestorePreview>(await fixture.api('POST', '/api/restore/preview', { token: session.token, body: { backup, password: OTHER } }));
+    assert.equal(preview.willReplace, true);
+    // Let the session expire while the preview is still valid: the write target must not silently
+    // fall back to the default profile.
+    fixture.advance(15000);
+    failure(await fixture.api('POST', '/api/restore/confirm', { body: { restoreToken: preview.restoreToken } }), 409, 'RESTORE_STALE');
+    assert.equal(await readVault(fixture.storagePath), defaultBefore, 'a stale restore must not touch the default vault');
+
+    const reopened = success<SessionResponse>(await unlockAttempt(fixture, { profile: '工作', password: OTHER }));
+    assert.deepEqual(reopened.vault.entries.map(entryItem => entryItem.name), ['工作档的条目']);
+    const retried = success<RestorePreview>(await fixture.api('POST', '/api/restore/preview', { token: reopened.token, body: { backup, password: OTHER } }));
+    const restored = success<SessionResponse>(await fixture.api('POST', '/api/restore/confirm', { body: { restoreToken: retried.restoreToken } }));
+    assert.deepEqual(restored.vault.entries.map(entryItem => entryItem.name), ['工作档的条目']);
+    assert.equal(await readVault(fixture.storagePath), defaultBefore, 'restoring into a profile must not touch the default vault');
+    assert.equal(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles.length, 2);
   });
 });

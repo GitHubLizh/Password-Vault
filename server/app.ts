@@ -6,12 +6,20 @@ import { StorageLocation } from './storage-location.js';
 import type { FolderPicker } from './folder-picker.js';
 import { record } from './validation.js';
 
-interface AppOptions {
-  directory: string;
+interface AppOptions {  directory: string;
   origin: string;
   staticDirectory?: string;
   now?: () => number;
   folderPicker?: FolderPicker;
+}
+
+// The default profile keeps the historic filename; only additional profiles carry their name, and a
+// user-supplied name needs a sanitised ASCII fallback alongside the RFC 5987 form.
+function attachment(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  return ascii === name
+    ? `attachment; filename="${name}.pvlt"`
+    : `attachment; filename="${ascii}.pvlt"; filename*=UTF-8''${encodeURIComponent(name)}.pvlt`;
 }
 
 export function buildApp(options: AppOptions) {
@@ -89,8 +97,9 @@ export function buildApp(options: AppOptions) {
     }
   });
   app.get('/api/backup', async (request, reply) => {
-    const source = await service.run(() => service.backup(token(request.headers.authorization)));
-    return reply.header('Content-Disposition', 'attachment; filename="password-vault.pvlt"')
+    const authorization = token(request.headers.authorization);
+    const [source, profileId] = await service.run(async () => [await service.backup(authorization), service.backupProfileId(authorization)] as const);
+    return reply.header('Content-Disposition', attachment(profileId === null ? 'password-vault' : `password-vault-${profileId}`))
       .type('application/octet-stream').send(Buffer.from(source));
   });
   app.post('/api/restore/preview', { bodyLimit: 12 * 1024 * 1024 }, request => service.run(() => service.previewRestore(request.body)));

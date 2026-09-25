@@ -587,6 +587,10 @@ test('creates an identity profile from the login page and keeps profiles apart',
   await page.screenshot({ path: info.outputPath('profile-work.png'), fullPage: true });
 
   await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  const profileDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出备份', exact: true }).click();
+  expect((await profileDownload).suggestedFilename()).toContain('工作');
+  await expect(page.locator('.settings-card').filter({ hasText: '备份与恢复' })).toContainText('只作用于当前身份档「工作」');
   const deleteButton = page.getByRole('button', { name: '删除身份档', exact: true });
   await expect(deleteButton).toBeDisabled();
   await page.getByLabel('输入身份档名称以确认', { exact: true }).fill('工作');

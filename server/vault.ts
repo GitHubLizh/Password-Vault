@@ -23,6 +23,7 @@ interface Session {
 
 interface PendingRestore {
   token: string;
+  profileId: string | null;
   key: Buffer;
   salt: Buffer;
   vault: VaultSnapshot;
@@ -615,6 +616,10 @@ export class VaultService {
     }
   }
 
+  backupProfileId(token?: string): string | null {
+    return this.requireSession(token).profileId;
+  }
+
   async backup(token?: string): Promise<string> {
     const session = this.requireSession(token);
     const source = await this.readSource();
@@ -637,7 +642,7 @@ export class VaultService {
     try {
       const vault = decrypt(envelope, key);
       this.pending = {
-        token: randomBytes(32).toString('base64url'), key, salt, vault, source,
+        token: randomBytes(32).toString('base64url'), profileId: this.activeProfileId, key, salt, vault, source,
         expectedFingerprint: current === null ? null : fingerprint(current), expiresAt: this.now() + 60000,
       };
       return {
@@ -666,6 +671,12 @@ export class VaultService {
       throw new VaultError(400, 'RESTORE_EXPIRED', '恢复预览已失效，请重新选择备份并验证。');
     }
     this.pending = undefined;
+    // The preview was taken against one profile's file; a session change in between must not let the
+    // write land on a different profile's vault.
+    if (pending.profileId !== this.activeProfileId) {
+      pending.key.fill(0);
+      throw new VaultError(409, 'RESTORE_STALE', '当前身份档已变化，请重新解锁后再恢复。');
+    }
     try {
       const safetyBackupPath = await this.atomicWrite(pending.source, pending.expectedFingerprint, true);
       return { ...this.beginSession(pending.key, pending.salt, pending.vault, pending.source), safetyBackupPath };

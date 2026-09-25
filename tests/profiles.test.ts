@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import type { LightMyRequestResponse } from 'fastify';
 import { MAX_PROFILES } from '../server/profile-name.js';
-import type { DeleteProfileResponse, ProfilesResponse, RestorePreview, SessionResponse, VaultResponse, VaultStatus } from '../shared/types.js';
+import type { DeleteProfileResponse, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultStatus } from '../shared/types.js';
 import { failure, success, withVault, type Fixture } from './helpers/vault-fixture.js';
 
 const PASSWORD = '  本地测试-主密码-e\u0301  ';
@@ -358,7 +358,8 @@ test('the default profile cannot be deleted', async () => {
   });
 });
 
-test('deleting a profile leaves unrelated files in its directory alone', async () => {  await withVault(async fixture => {
+test('deleting a profile leaves unrelated files in its directory alone', async () => {
+  await withVault(async fixture => {
     await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
     const work = await enter(fixture, '工作');
     await writeFile(join(fixture.directory, '工作', '我的笔记.txt'), '保留', 'utf8');
@@ -382,6 +383,52 @@ test('backup download is named after the current profile', async () => {
     const header = String(response.headers['content-disposition']);
     assert.match(header, /filename\*=UTF-8''password-vault-%E5%B7%A5%E4%BD%9C\.pvlt/, 'the UTF-8 form must carry the real name');
     assert.match(header, /filename="password-vault-__\.pvlt"/, 'the ASCII fallback must stay header-safe');
+  });
+});
+
+test('migration moves every profile together and keeps the abandoned store intact', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    const workSource = await readVault(await profileVault(fixture, '工作'));
+    const target = join(dirname(fixture.directory), `${basename(fixture.directory)}-moved`);
+
+    success<StorageLocationResponse>(await fixture.api('POST', '/api/storage-location', {
+      token: filled.token, body: { directory: target, storagePath: fixture.storagePath, revision: filled.vault.revision, confirmed: true },
+    }));
+    await fixture.restart();
+    assert.deepEqual((await readdir(target)).sort(), ['vault.pvlt', '工作']);
+    assert.equal(await readVault(join(target, 'vault.pvlt')), defaultSource, 'the default vault must arrive byte-identical');
+    assert.equal(await readVault(join(target, '工作', 'vault.pvlt')), workSource, 'the profile vault must arrive byte-identical');
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'migration copies rather than moves');
+    const reopened = success<SessionResponse>(await unlockAttempt(fixture, { profile: '工作', password: OTHER }));
+    assert.deepEqual(reopened.vault.entries.map(entryItem => entryItem.name), ['工作档的条目']);
+  });
+});
+
+test('migration refuses a target already holding a profile vault and leaves everything alone', async () => {
+  await withVault(async fixture => {
+    await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const workSource = await readVault(await profileVault(fixture, '工作'));
+    const target = join(dirname(fixture.directory), `${basename(fixture.directory)}-occupied`);
+    await mkdir(join(target, '工作'), { recursive: true });
+    await writeFile(join(target, '工作', 'vault.pvlt'), '{"format":"other"}', 'utf8');
+
+    failure(await fixture.api('POST', '/api/storage-location', {
+      token: filled.token, body: { directory: target, storagePath: fixture.storagePath, revision: filled.vault.revision, confirmed: true },
+    }), 409, 'TARGET_EXISTS');
+    assert.deepEqual(await readdir(target), ['工作'], 'a refused migration must create nothing in the target');
+    assert.equal(await readVault(join(target, '工作', 'vault.pvlt')), '{"format":"other"}');
+    assert.equal(await readVault(fixture.storagePath), defaultSource);
+    assert.equal(await readVault(await profileVault(fixture, '工作')), workSource);
+    assert.equal(success<VaultStatus>(await fixture.api('GET', '/api/status', { token: filled.token })).storagePath,
+      await profileVault(fixture, '工作'), 'the session must still point at the original store');
   });
 });
 

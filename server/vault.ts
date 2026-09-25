@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, open, readFile, readdir, realpath, rename, rmdir, stat, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { ChangeMasterPasswordResponse, DeleteProfileResponse, FolderSelectionResponse, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
 import { listProfileIds } from './profile-store.js';
 import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './crypto.js';
@@ -541,8 +541,8 @@ export class VaultService {
     const requestedDirectory = storageDirectory(input.directory);
     const previousStoragePath = this.rootStoragePath;
     const guards: { path: string; handle: Awaited<ReturnType<typeof open>> }[] = [];
-    let targetPath: string | undefined;
-    let createdTarget = false;
+    const createdFiles: string[] = [];
+    const createdDirectories: string[] = [];
     let committed = false;
     try {
       await mkdir(requestedDirectory, { recursive: true, mode: 0o700 });
@@ -553,7 +553,20 @@ export class VaultService {
         : targetDirectory === currentDirectory) {
         throw new VaultError(400, 'SAME_DIRECTORY', '新目录与当前目录相同，无需迁移。');
       }
-      for (const directory of [this.rootDirectory, targetDirectory]) {
+      // Every profile travels together: guard the root plus each source profile directory, and refuse
+      // to write anything until every destination is known to be free.
+      const ids = await listProfileIds(currentDirectory);
+      // A target that already holds a vault.pvlt also shows up as a source profile, so the same
+      // directory can arrive twice; guarding it twice would report a bogus FILE_BUSY.
+      const guardPaths: string[] = [];
+      const guarded = new Set<string>();
+      for (const path of [currentDirectory, targetDirectory, ...ids.filter(id => id !== '').map(id => join(currentDirectory, id))]) {
+        const key = process.platform === 'win32' ? path.toLowerCase() : path;
+        if (guarded.has(key)) continue;
+        guarded.add(key);
+        guardPaths.push(path);
+      }
+      for (const directory of guardPaths) {
         const path = join(directory, 'vault.write-lock');
         try {
           const handle = await open(path, 'wx', 0o600);
@@ -566,26 +579,41 @@ export class VaultService {
         }
       }
       await this.location.assertCurrent();
-      const source = await this.backup(token);
-      targetPath = join(targetDirectory, 'vault.pvlt');
-      let target;
-      try {
-        target = await open(targetPath, 'wx', 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-          throw new VaultError(409, 'TARGET_EXISTS', '新目录已存在 vault.pvlt，不能覆盖。请使用其他目录。');
+      // Verifies the live session still matches its own file on disk; each file below is then read
+      // from its own path, because backup() returns the *current* profile's bytes.
+      await this.backup(token);
+      const copies = ids.map(id => ({
+        from: id === '' ? join(currentDirectory, 'vault.pvlt') : join(currentDirectory, id, 'vault.pvlt'),
+        to: id === '' ? join(targetDirectory, 'vault.pvlt') : join(targetDirectory, id, 'vault.pvlt'),
+      }));
+      for (const copy of copies) {
+        try {
+          await stat(copy.to);
+          throw new VaultError(409, 'TARGET_EXISTS', '新目录已存在同名密码库，不能覆盖。请使用其他目录。');
+        } catch (error) {
+          if (error instanceof VaultError) throw error;
+          if (!missing(error)) throw error;
         }
-        throw error;
       }
-      createdTarget = true;
-      try {
-        await target.writeFile(source, 'utf8');
-        await target.sync();
-      } finally {
-        await target.close();
-      }
-      if (fingerprint(await readFile(targetPath, 'utf8')) !== session.fingerprint) {
-        throw new VaultError(500, 'MIGRATION_FAILED', '新文件校验失败，仍使用原目录。');
+      for (const copy of copies) {
+        const bytes = await readFile(copy.from, 'utf8');
+        const expected = fingerprint(bytes);
+        const directory = dirname(copy.to);
+        if (directory !== targetDirectory) {
+          await mkdir(directory, { recursive: true, mode: 0o700 });
+          createdDirectories.push(directory);
+        }
+        const target = await open(copy.to, 'wx', 0o600);
+        createdFiles.push(copy.to);
+        try {
+          await target.writeFile(bytes, 'utf8');
+          await target.sync();
+        } finally {
+          await target.close();
+        }
+        if (fingerprint(await readFile(copy.to, 'utf8')) !== expected) {
+          throw new VaultError(500, 'MIGRATION_FAILED', '新文件校验失败，仍使用原目录。');
+        }
       }
       this.requireSession(token);
       // Commit the location only after a complete, verified encrypted copy exists.
@@ -598,7 +626,10 @@ export class VaultService {
         status: { exists: true, unlocked: false, storagePath: this.rootStoragePath, autoLockMinutes: 5, expiresAt: null, revision: null },
       };
     } catch (error) {
-      if (createdTarget && !committed && targetPath) await unlink(targetPath).catch(() => undefined);
+      if (!committed) {
+        for (const path of createdFiles.reverse()) await unlink(path).catch(() => undefined);
+        for (const directory of createdDirectories.reverse()) await rmdir(directory).catch(() => undefined);
+      }
       if (error instanceof VaultError) throw error;
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {

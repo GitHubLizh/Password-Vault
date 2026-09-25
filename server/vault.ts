@@ -66,7 +66,7 @@ export class VaultService {
   private pending?: PendingRestore;
   private tail: Promise<unknown> = Promise.resolve();
   private queued = 0;
-  private nextAttemptAt = 0;
+  private readonly attemptSlots = new Map<string, number>();
   private activePicker?: AbortController;
   private readonly timer: ReturnType<typeof setInterval>;
 
@@ -135,11 +135,17 @@ export class VaultService {
     return this.session;
   }
 
-  private throttle(): void {
-    if (this.now() < this.nextAttemptAt) {
+  // One budget per profile: failing on 工作 must not freeze 默认, and vice versa.
+  private throttle(slot: string): void {
+    const next = this.attemptSlots.get(slot) ?? 0;
+    if (this.now() < next) {
       throw new VaultError(429, 'TRY_LATER', '请稍候一秒再尝试。');
     }
-    this.nextAttemptAt = this.now() + 1000;
+    this.attemptSlots.set(slot, this.now() + 1000);
+  }
+
+  private profileSlot(): string {
+    return `profile:${this.activeProfileId ?? ''}`;
   }
 
   private async readSource(): Promise<string | null> {
@@ -244,7 +250,7 @@ export class VaultService {
 
   async create(rawPassword: unknown): Promise<SessionResponse> {
     const password = validate.password(rawPassword, true);
-    this.throttle();
+    this.throttle(this.profileSlot());
     if (await this.readSource() !== null) throw new VaultError(409, 'EXISTS', '密码库已存在，请解锁，不要重复创建。');
     const salt = randomBytes(16);
     const key = await deriveKey(password, salt);
@@ -289,7 +295,7 @@ export class VaultService {
     }
     this.activeProfileId = profile;
     try {
-      this.throttle();
+      this.throttle(this.profileSlot());
       const source = await this.readSource();
       if (source === null) throw new VaultError(404, 'NOT_FOUND', '还没有密码库，请先创建。');
       const envelope = parseEnvelope(source);
@@ -323,7 +329,7 @@ export class VaultService {
     if (newPassword === currentPassword) {
       throw new VaultError(400, 'NEW_PASSWORD_UNCHANGED', '新主密码不能与当前主密码相同。');
     }
-    this.throttle();
+    this.throttle(this.profileSlot());
     await this.backup(token);
     let currentKey: Buffer | undefined;
     let newKey: Buffer | undefined;
@@ -563,7 +569,7 @@ export class VaultService {
     const password = validate.password(input.password);
     const source = validate.text(input.backup, '备份文件', MAX_VAULT_BYTES, 1);
     const envelope = parseEnvelope(source);
-    this.throttle();
+    this.throttle('restore');
     this.clearPending();
     const current = await this.readSource();
     const salt = Buffer.from(envelope.salt, 'base64');

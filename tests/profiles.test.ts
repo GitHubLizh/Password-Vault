@@ -232,6 +232,21 @@ test('session endpoints refuse a caller-selected profile without touching the ot
   });
 });
 
+test('wrong-password attempts are budgeted per profile', async () => {
+  await withVault(async fixture => {
+    await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
+    const work = await enter(fixture, '工作');
+    await fixture.api('POST', '/api/lock', { token: work.token });
+
+    failure(await unlockAttempt(fixture, { profile: '工作', password: '错的口令-2026-abcd' }), 400, 'DECRYPT_FAILED');
+    // The default profile's budget was untouched by that attempt, so it may be used right away.
+    const defaultSession = success<SessionResponse>(await fixture.api('POST', '/api/unlock', { body: { password: PASSWORD } }));
+    assert.ok(defaultSession.token);
+    // The profile that just failed is still cooling down.
+    failure(await fixture.api('POST', '/api/unlock', { body: { profile: '工作', password: OTHER } }), 429, 'TRY_LATER');
+  });
+});
+
 test('profile names collide case-insensitively and the profile count is capped', async () => {
   await withVault(async fixture => {
     await enter(fixture, '工作');

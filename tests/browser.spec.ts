@@ -573,7 +573,13 @@ test('creates an identity profile from the login page and keeps profiles apart',
   await expect(page.locator('.entry-row')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: '没有找到相关条目' })).toBeVisible();
 
+  await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  await page.getByLabel('默认身份档名称', { exact: true }).fill('个人');
+  await page.getByRole('button', { name: '保存名称', exact: true }).click();
+  await expect(page.locator('.notice-bar')).toContainText('默认身份档已改名为「个人」');
   await page.getByRole('button', { name: '锁定', exact: true }).click();
+  await expect(page.getByRole('button', { name: '个人', exact: true })).toBeVisible();
+
   await page.getByRole('button', { name: '工作', exact: true }).click();
   await unlockInPlace(page, PROFILE_PASSWORD);
   await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill('只有工作档看得见');

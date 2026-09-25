@@ -8,9 +8,8 @@ import { VaultError } from './errors.js';
 import { StorageLocation, storageDirectory } from './storage-location.js';
 import { pickFolder, type FolderPicker } from './folder-picker.js';
 import { MAX_PROFILES, profileName, profileNameKey } from './profile-name.js';
+import { readDefaultProfileName, writeDefaultProfileName } from './profile-config.js';
 import * as validate from './validation.js';
-
-const DEFAULT_PROFILE_NAME = '默认';
 
 interface Session {
   token: string;
@@ -240,12 +239,25 @@ export class VaultService {
     };
   }
 
+  private get profileConfigPath(): string { return join(this.location.profileDirectory, 'profiles.json'); }
+
   async profiles(): Promise<ProfilesResponse> {
+    const defaultName = await readDefaultProfileName(this.profileConfigPath);
     return { profiles: (await listProfileIds(this.rootDirectory)).map(id => ({
       id: id === '' ? null : id,
-      name: id === '' ? DEFAULT_PROFILE_NAME : id,
+      name: id === '' ? defaultName : id,
       isDefault: id === '',
     })) };
+  }
+
+  async renameDefaultProfile(token: string | undefined, body: unknown): Promise<ProfilesResponse> {
+    const session = this.requireSession(token);
+    if (session.profileId !== null) {
+      throw new VaultError(400, 'NOT_DEFAULT_PROFILE', '只有默认身份档可以改显示名，其他身份档的名字就是它的目录名。');
+    }
+    const input = validate.record(body);
+    await writeDefaultProfileName(this.profileConfigPath, input.name);
+    return this.profiles();
   }
 
   async create(rawPassword: unknown): Promise<SessionResponse> {

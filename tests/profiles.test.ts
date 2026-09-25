@@ -268,3 +268,50 @@ test('profile names collide case-insensitively and the profile count is capped',
     failure(await fixture.api('GET', '/api/vault', { token: alpha.token }), 401, 'LOCKED');
   });
 });
+
+test('the default profile can be renamed and the name survives restarts', async () => {
+  await withVault(async fixture => {
+    const session = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    const renamed = success<ProfilesResponse>(await fixture.api('POST', '/api/profiles/default-name', { token: session.token, body: { name: '个人' } }));
+    assert.deepEqual(renamed.profiles, [{ id: null, name: '个人', isDefault: true }]);
+    assert.deepEqual((await readdir(fixture.directory)).sort(), ['profiles.json', 'vault.pvlt']);
+    await fixture.restart();
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '个人', isDefault: true },
+    ]);
+    const reopened = success<SessionResponse>(await unlockAttempt(fixture, { password: PASSWORD }));
+    assert.ok(reopened.token, 'renaming must not affect unlocking');
+  });
+});
+
+test('renaming the default profile is refused from another profile and for invalid names', async () => {
+  await withVault(async fixture => {
+    await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
+    const work = await enter(fixture, '工作');
+    failure(await fixture.api('POST', '/api/profiles/default-name', { token: work.token, body: { name: '个人' } }), 400, 'NOT_DEFAULT_PROFILE');
+    failure(await fixture.api('POST', '/api/profiles/default-name', { body: { name: '个人' } }), 401, 'LOCKED');
+    const session = success<SessionResponse>(await fixture.api('POST', '/api/unlock', { body: { password: PASSWORD } }));
+    for (const name of ['', '   ', 'x'.repeat(33), '<坏名字>', '../逃逸']) {
+      failure(await fixture.api('POST', '/api/profiles/default-name', { token: session.token, body: { name } }), 400, 'INVALID_PROFILE_NAME');
+    }
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+      { id: '工作', name: '工作', isDefault: false },
+    ]);
+  });
+});
+
+test('a damaged display-name config falls back to 默认 without blocking unlock', async () => {
+  await withVault(async fixture => {
+    const session = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    success<ProfilesResponse>(await fixture.api('POST', '/api/profiles/default-name', { token: session.token, body: { name: '个人' } }));
+    const configPath = join(fixture.directory, 'profiles.json');
+    for (const damaged of ['{', JSON.stringify({ version: 2, defaultName: '个人' }), JSON.stringify({ version: 1, defaultName: '<非法但已落盘>' })]) {
+      await writeFile(configPath, damaged, 'utf8');
+      assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+        { id: null, name: '默认', isDefault: true },
+      ], `config ${damaged} must fall back to the built-in name`);
+      success<SessionResponse>(await unlockAttempt(fixture, { password: PASSWORD }));
+    }
+  });
+});

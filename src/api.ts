@@ -70,6 +70,7 @@ export const api = {
   }),
   profiles: () => request<ProfilesResponse>('/profiles'),
   createProfile: (name: string, password: string) => request<SessionResponse>('/profiles', { method: 'POST', body: { name, password } }),
+  renameDefaultProfile: (token: string, name: string) => request<ProfilesResponse>('/profiles/default-name', { method: 'POST', token, body: { name } }),
   lock: (token: string, keepalive = false) => request<{ ok: true }>('/lock', {
     method: 'POST', token, body: {}, keepalive,
   }),

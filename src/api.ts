@@ -1,6 +1,7 @@
 import type {
   AutoLockMinutes,
   ChangeMasterPasswordResponse,
+  DeleteProfileResponse,
   EntryInput,
   FolderSelectionResponse,
   ProfilesResponse,
@@ -71,6 +72,9 @@ export const api = {
   profiles: () => request<ProfilesResponse>('/profiles'),
   createProfile: (name: string, password: string) => request<SessionResponse>('/profiles', { method: 'POST', body: { name, password } }),
   renameDefaultProfile: (token: string, name: string) => request<ProfilesResponse>('/profiles/default-name', { method: 'POST', token, body: { name } }),
+  deleteProfile: (token: string, name: string, revision: number) => request<DeleteProfileResponse>('/profiles', {
+    method: 'DELETE', token, body: { name, confirmed: true, revision },
+  }),
   lock: (token: string, keepalive = false) => request<{ ok: true }>('/lock', {
     method: 'POST', token, body: {}, keepalive,
   }),

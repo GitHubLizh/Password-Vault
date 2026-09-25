@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ChangeMasterPasswordResponse, FolderSelectionResponse, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
+import type { ChangeMasterPasswordResponse, DeleteProfileResponse, FolderSelectionResponse, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
 import { listProfileIds } from './profile-store.js';
 import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './crypto.js';
 import { VaultError } from './errors.js';
@@ -248,6 +248,54 @@ export class VaultService {
       name: id === '' ? defaultName : id,
       isDefault: id === '',
     })) };
+  }
+
+  async deleteProfile(token: string | undefined, body: unknown): Promise<DeleteProfileResponse> {
+    const session = this.requireSession(token);
+    const input = validate.record(body);
+    rejectProfileSelector(input);
+    if (session.profileId === null) throw new VaultError(400, 'DEFAULT_PROFILE_UNDELETABLE', '默认身份档不能删除。');
+    if (input.confirmed !== true || input.name !== session.profileId) {
+      throw new VaultError(400, 'INVALID_INPUT', '请输入该身份档的名称以确认删除。');
+    }
+    this.checkRevision(session, input.revision);
+    const directory = this.profileDirectory;
+    const guardPath = join(directory, 'vault.write-lock');
+    const guard = await open(guardPath, 'wx', 0o600).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'EEXIST') throw new VaultError(409, 'FILE_BUSY', '这个身份档正在被写入，请稍后再试。');
+      throw error;
+    });
+    let safetyBackupPath = '';
+    try {
+      const source = await this.readSource();
+      if (source === null || fingerprint(source) !== session.fingerprint) {
+        throw new VaultError(409, 'FILE_CHANGED', '磁盘中的密码库已变化，请重新解锁后再删除。');
+      }
+      // The copy is written before anything is removed: an interrupted delete must leave a decryptable file.
+      safetyBackupPath = join(this.rootDirectory, `before-delete-${this.now()}-${randomUUID()}.pvlt`);
+      const backup = await open(safetyBackupPath, 'wx', 0o600);
+      try {
+        await backup.writeFile(source, 'utf8');
+        await backup.sync();
+      } finally {
+        await backup.close();
+      }
+      await unlink(this.storagePath);
+      for (const name of await readdir(directory)) {
+        if (name === 'vault.write-lock' || (name.startsWith('.vault-') && name.endsWith('.tmp'))) {
+          await unlink(join(directory, name)).catch(() => undefined);
+        }
+      }
+    } catch (error) {
+      if (safetyBackupPath) await unlink(safetyBackupPath).catch(() => undefined);
+      throw error;
+    } finally {
+      await guard.close().catch(() => undefined);
+      await unlink(guardPath).catch(() => undefined);
+    }
+    this.clearSession();
+    this.clearPending();
+    return { status: await this.status(), safetyBackupPath };
   }
 
   async renameDefaultProfile(token: string | undefined, body: unknown): Promise<ProfilesResponse> {

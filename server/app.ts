@@ -64,6 +64,7 @@ export function buildApp(options: AppOptions) {
   app.get('/api/profiles', () => service.run(() => service.profiles()));
   app.post('/api/profiles', request => service.run(() => service.createProfile(request.body)));
   app.post('/api/profiles/default-name', request => service.run(() => service.renameDefaultProfile(token(request.headers.authorization), request.body)));
+  app.delete('/api/profiles', request => service.run(() => service.deleteProfile(token(request.headers.authorization), request.body)));
   app.post('/api/create', request => service.run(() => service.create(record(request.body).password)));
   app.post('/api/unlock', request => service.run(() => service.unlock(request.body)));
   app.post('/api/master-password', request => service.run(() => service.changeMasterPassword(token(request.headers.authorization), request.body)));

@@ -63,6 +63,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [creatingProfile, setCreatingProfile] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [masterPasswordOpen, setMasterPasswordOpen] = useState(false);
   const [masterPasswordReloadRequired, setMasterPasswordReloadRequired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -443,6 +444,26 @@ export default function App() {
       if (isCurrent(version)) { busyRef.current = false; sessionChangeRef.current = false; setBusy(null); }
     }
   };
+  const deleteCurrentProfile = async (name: string) => {
+    const version = epoch.current;
+    if (busyRef.current || !isActive(version) || !sessionRef.current) return;
+    const current = sessionRef.current;
+    busyRef.current = true;
+    setBusy('正在删除身份档…');
+    setError('');
+    try {
+      const result = await api.deleteProfile(current.token, name, current.vault.revision);
+      if (!isActive(version)) return;
+      clearSensitive(`身份档「${name}」已删除。安全副本 ${result.safetyBackupPath} 仍可用该档主密码解开，不需要时请手动删除。`);
+      setStatus(result.status);
+      setStatusAttempt(previous => previous + 1);
+      setDeleteConfirmation('');
+    } catch (cause) {
+      if (isActive(version) && !handleFailure(cause, version)) setError(errorText(cause));
+    } finally {
+      if (isCurrent(version)) { busyRef.current = false; setBusy(null); }
+    }
+  };
   const renameDefaultProfile = async (name: string) => {
     const version = epoch.current;
     if (busyRef.current || !isActive(version) || !sessionRef.current) return;
@@ -568,6 +589,7 @@ export default function App() {
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="file" /></span><div><h2>密码库文件</h2><p>文件由本地服务管理，界面不会自动打开路径或地址。</p></div></div><p className="storage-path-label">当前存储位置</p><code className="path-block">{status?.storagePath || '正在获取文件位置…'}</code><button className="button secondary storage-change-button" onClick={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setStorageOpen(true); }} disabled={!!busy || !status?.storagePath}><Icon name="edit" size={17} />修改存储位置</button></section>
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="lock" /></span><div><h2>主密码</h2><p>修改必须提供当前主密码。成功后本页会立即锁定，需用新主密码重新解锁。</p></div></div><p className="field-hint">旧备份和历史迁移副本不会改变，仍需使用各自对应的旧主密码。修改后请重新导出加密备份。</p><button className="button secondary storage-change-button" onClick={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setMasterPasswordOpen(true); }} disabled={!!busy}><Icon name="edit" size={17} />修改主密码</button></section>
             {selectedProfile?.isDefault && <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="account" /></span><div><h2>身份档</h2><p>默认身份档在登录页显示为这个名字。其他身份档的名字就是它的目录名，建档后不可改。</p></div></div><form onSubmit={event => { event.preventDefault(); const value = new FormData(event.currentTarget).get('profile-display-name'); void renameDefaultProfile(String(value).trim()); }}><label htmlFor="profile-display-name">默认身份档名称</label><div className="settings-controls"><input id="profile-display-name" name="profile-display-name" type="text" defaultValue={selectedProfile.name} minLength={1} maxLength={32} required disabled={!!busy} autoComplete="off" /><button type="submit" className="button primary" disabled={!!busy || conflict}>保存名称</button></div></form><p className="field-hint">改的只是显示名，磁盘上的文件位置不变。忘记主密码仍然无法找回。</p></section>}
+            {selectedProfile && !selectedProfile.isDefault && <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="trash" /></span><div><h2>删除这个身份档</h2><p>只移除「{selectedProfile.name}」自己的库文件，其他身份档不受影响。删除前会在存储目录留下一份加密副本。</p></div></div><form onSubmit={event => { event.preventDefault(); if (deleteConfirmation !== selectedProfile.name) return; if (!window.confirm(`确定删除身份档「${selectedProfile.name}」？该档的条目将从本机移除。`)) return; void deleteCurrentProfile(selectedProfile.name); }}><label htmlFor="profile-delete-confirm">输入身份档名称以确认</label><div className="settings-controls"><input id="profile-delete-confirm" type="text" value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} placeholder={selectedProfile.name} autoComplete="off" spellCheck={false} disabled={!!busy} /><button type="submit" className="button secondary" disabled={!!busy || conflict || deleteConfirmation !== selectedProfile.name}><Icon name="trash" size={17} />删除身份档</button></div></form><p className="field-hint">没有第二道刹车：删除只需要这个档处于已解锁状态，所以请先确认副本已经转移到安全位置，再删除原档。</p></section>}
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="shield" /></span><div><h2>备份与恢复</h2><p>备份是加密文件，恢复时仍需备份的主密码。</p></div></div><div className="backup-action"><div><h3>导出加密备份</h3><p>建议定期备份，并将备份保存在安全的位置。</p></div><button className="button secondary" onClick={() => void exportBackup()} disabled={!!busy}><Icon name="download" size={17} />导出备份</button></div><div className="backup-action"><div><h3>从备份恢复</h3><p>整库替换，不会合并。覆盖前会创建当前库的安全副本。</p></div><button className="button secondary" onClick={() => setRestoreOpen(true)} disabled={!!busy}><Icon name="upload" size={17} />恢复备份</button></div></section>
             <p className="settings-disclaimer"><Icon name="info" size={17} />请牢记主密码。忘记主密码后，无法找回密码库或解密备份。</p>
           </section>}

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { LightMyRequestResponse } from 'fastify';
 import { MAX_PROFILES } from '../server/profile-name.js';
-import type { ProfilesResponse, SessionResponse, VaultResponse, VaultStatus } from '../shared/types.js';
+import type { DeleteProfileResponse, ProfilesResponse, RestorePreview, SessionResponse, VaultResponse, VaultStatus } from '../shared/types.js';
 import { failure, success, withVault, type Fixture } from './helpers/vault-fixture.js';
 
 const PASSWORD = '  本地测试-主密码-e\u0301  ';
@@ -313,5 +313,59 @@ test('a damaged display-name config falls back to 默认 without blocking unlock
       ], `config ${damaged} must fall back to the built-in name`);
       success<SessionResponse>(await unlockAttempt(fixture, { password: PASSWORD }));
     }
+  });
+});
+
+test('deleting an unlocked profile keeps a decryptable copy and leaves the default vault alone', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    const body = { name: '工作', confirmed: true, revision: filled.vault.revision };
+
+    failure(await fixture.api('DELETE', '/api/profiles', { body }), 401, 'LOCKED');
+    failure(await fixture.api('DELETE', '/api/profiles', { token: filled.token, body: { ...body, confirmed: undefined } }), 400, 'INVALID_INPUT');
+    failure(await fixture.api('DELETE', '/api/profiles', { token: filled.token, body: { ...body, name: '别的名字' } }), 400, 'INVALID_INPUT');
+    failure(await fixture.api('DELETE', '/api/profiles', { token: filled.token, body: { ...body, profile: '默认' } }), 400, 'INVALID_INPUT');
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'a refused delete must not touch anything');
+
+    const deleted = success<DeleteProfileResponse>(await fixture.api('DELETE', '/api/profiles', { token: filled.token, body }));
+    assert.match(deleted.safetyBackupPath, /before-delete-.*\.pvlt$/);
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+    ]);
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'deleting a profile must not touch the default vault');
+    assert.deepEqual(await readdir(join(fixture.directory, '工作')), []);
+    failure(await fixture.api('GET', '/api/vault', { token: filled.token }), 401, 'LOCKED');
+
+    const preview = success<RestorePreview>(await fixture.api('POST', '/api/restore/preview', {
+      body: { backup: await readFile(deleted.safetyBackupPath, 'utf8'), password: OTHER },
+    }));
+    assert.equal(preview.entryCount, 1, 'the safety copy must still decrypt with the deleted profile password');
+    success(await fixture.api('POST', '/api/restore/cancel', { body: { restoreToken: preview.restoreToken } }));
+  });
+});
+
+test('the default profile cannot be deleted', async () => {
+  await withVault(async fixture => {
+    const session = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    failure(await fixture.api('DELETE', '/api/profiles', {
+      token: session.token, body: { name: '默认', confirmed: true, revision: session.vault.revision },
+    }), 400, 'DEFAULT_PROFILE_UNDELETABLE');
+    assert.ok((await readVault(fixture.storagePath)).length > 0);
+  });
+});
+
+test('deleting a profile leaves unrelated files in its directory alone', async () => {
+  await withVault(async fixture => {
+    await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
+    const work = await enter(fixture, '工作');
+    await writeFile(join(fixture.directory, '工作', '我的笔记.txt'), '保留', 'utf8');
+    success<DeleteProfileResponse>(await fixture.api('DELETE', '/api/profiles', {
+      token: work.token, body: { name: '工作', confirmed: true, revision: work.vault.revision },
+    }));
+    assert.deepEqual(await readdir(join(fixture.directory, '工作')), ['我的笔记.txt']);
   });
 });

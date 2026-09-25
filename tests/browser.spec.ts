@@ -585,4 +585,16 @@ test('creates an identity profile from the login page and keeps profiles apart',
   await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill('只有工作档看得见');
   await expect(page.locator('.entry-row')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('profile-work.png'), fullPage: true });
+
+  await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  const deleteButton = page.getByRole('button', { name: '删除身份档', exact: true });
+  await expect(deleteButton).toBeDisabled();
+  await page.getByLabel('输入身份档名称以确认', { exact: true }).fill('工作');
+  await expect(deleteButton).toBeEnabled();
+  page.once('dialog', dialog => dialog.accept());
+  await deleteButton.click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.locator('.auth-card .message')).toContainText('身份档「工作」已删除');
+  await expect(page.getByRole('button', { name: '工作', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '个人', exact: true })).toBeVisible();
 });

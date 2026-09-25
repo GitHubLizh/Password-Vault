@@ -35,6 +35,11 @@ export interface ProfilesResponse {
   profiles: ProfileSummary[];
 }
 
+export interface DeleteProfileResponse {
+  status: VaultStatus;
+  safetyBackupPath: string;
+}
+
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;

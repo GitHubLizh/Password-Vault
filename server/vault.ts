@@ -1,12 +1,14 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ChangeMasterPasswordResponse, FolderSelectionResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
+import type { ChangeMasterPasswordResponse, FolderSelectionResponse, ProfileSummary, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
 import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './crypto.js';
 import { VaultError } from './errors.js';
 import { StorageLocation, storageDirectory } from './storage-location.js';
 import { pickFolder, type FolderPicker } from './folder-picker.js';
 import * as validate from './validation.js';
+
+const DEFAULT_PROFILE_NAME = '默认';
 
 interface Session {
   token: string;
@@ -215,6 +217,37 @@ export class VaultService {
       autoLockMinutes: session?.vault.settings.autoLockMinutes ?? 5,
       expiresAt: session?.expiresAt ?? null, revision: session?.vault.revision ?? null,
     };
+  }
+
+  // A profile exists iff its vault.pvlt is a readable regular file; unreadable candidates are skipped
+  // so that one broken directory cannot take the whole list down.
+  private async isProfileVault(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  async profiles(): Promise<ProfilesResponse> {
+    const profiles: ProfileSummary[] = [];
+    if (await this.isProfileVault(this.rootStoragePath)) {
+      profiles.push({ id: null, name: DEFAULT_PROFILE_NAME, isDefault: true });
+    }
+    const additional: ProfileSummary[] = [];
+    try {
+      for (const entry of await readdir(this.rootDirectory, { withFileTypes: true })) {
+        // withFileTypes reports symlinks as neither file nor directory: a linked folder is not a profile.
+        if (!entry.isDirectory()) continue;
+        if (await this.isProfileVault(join(this.rootDirectory, entry.name, 'vault.pvlt'))) {
+          additional.push({ id: entry.name, name: entry.name, isDefault: false });
+        }
+      }
+    } catch (error) {
+      if (!missing(error)) throw error;
+    }
+    additional.sort((left, right) => left.name.localeCompare(right.name, 'zh'));
+    return { profiles: [...profiles, ...additional] };
   }
 
   async create(rawPassword: unknown): Promise<SessionResponse> {

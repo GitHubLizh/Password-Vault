@@ -25,6 +25,16 @@ export interface VaultSnapshot {
   revision: number;
 }
 
+export interface ProfileSummary {
+  id: string | null;
+  name: string;
+  isDefault: boolean;
+}
+
+export interface ProfilesResponse {
+  profiles: ProfileSummary[];
+}
+
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;

@@ -41,8 +41,12 @@ function missing(error: unknown): boolean {
 }
 
 export class VaultService {
-  get directory(): string { return this.location.directory; }
-  get storagePath(): string { return join(this.directory, 'vault.pvlt'); }
+  // Storage root, as opposed to the current profile's directory (equal until profiles exist).
+  get rootDirectory(): string { return this.location.directory; }
+  get profileDirectory(): string { return this.rootDirectory; }
+  // Storage location and folder picking are root-level concerns: the whole profile tree moves together.
+  get rootStoragePath(): string { return join(this.rootDirectory, 'vault.pvlt'); }
+  get storagePath(): string { return join(this.profileDirectory, 'vault.pvlt'); }
   private session?: Session;
   private pending?: PendingRestore;
   private tail: Promise<unknown> = Promise.resolve();
@@ -137,8 +141,8 @@ export class VaultService {
   }
 
   private async atomicWrite(source: string, expected: string | null, safetyBackup = false, beforeReplace?: () => void): Promise<string | undefined> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const guardPath = join(this.directory, 'vault.write-lock');
+    await mkdir(this.profileDirectory, { recursive: true, mode: 0o700 });
+    const guardPath = join(this.profileDirectory, 'vault.write-lock');
     let guard;
     try {
       guard = await open(guardPath, 'wx', 0o600);
@@ -148,7 +152,7 @@ export class VaultService {
       }
       throw error;
     }
-    const temporaryPath = join(this.directory, `.vault-${randomUUID()}.tmp`);
+    const temporaryPath = join(this.profileDirectory, `.vault-${randomUUID()}.tmp`);
     try {
       await this.location.assertCurrent();
       const current = await this.readSource();
@@ -157,7 +161,7 @@ export class VaultService {
       }
       let backupPath: string | undefined;
       if (safetyBackup && current !== null) {
-        backupPath = join(this.directory, `before-restore-${this.now()}-${randomUUID()}.pvlt`);
+        backupPath = join(this.profileDirectory, `before-restore-${this.now()}-${randomUUID()}.pvlt`);
         const backup = await open(backupPath, 'wx', 0o600);
         try {
           await backup.writeFile(await readFile(this.storagePath));
@@ -379,7 +383,7 @@ export class VaultService {
     if (signal.aborted) controller.abort();
     try {
       // Native dialogs must not hold the write queue: lock and status still need to run.
-      const selected = await this.folderPicker(this.directory, controller.signal);
+      const selected = await this.folderPicker(this.rootDirectory, controller.signal);
       return await this.run(async () => {
         this.requireSession(token);
         if (controller.signal.aborted) throw new VaultError(409, 'PICKER_CANCELLED', '文件夹选择已取消。');
@@ -402,11 +406,11 @@ export class VaultService {
     const session = this.requireSession(token);
     const input = validate.record(body);
     this.checkRevision(session, input.revision);
-    if (input.confirmed !== true || input.storagePath !== this.storagePath) {
+    if (input.confirmed !== true || input.storagePath !== this.rootStoragePath) {
       throw new VaultError(400, 'INVALID_INPUT', '请核对当前存储位置并确认迁移。');
     }
     const requestedDirectory = storageDirectory(input.directory);
-    const previousStoragePath = this.storagePath;
+    const previousStoragePath = this.rootStoragePath;
     const guards: { path: string; handle: Awaited<ReturnType<typeof open>> }[] = [];
     let targetPath: string | undefined;
     let createdTarget = false;
@@ -414,13 +418,13 @@ export class VaultService {
     try {
       await mkdir(requestedDirectory, { recursive: true, mode: 0o700 });
       const targetDirectory = storageDirectory(await realpath(requestedDirectory));
-      const currentDirectory = await realpath(this.directory);
+      const currentDirectory = await realpath(this.rootDirectory);
       if (process.platform === 'win32'
         ? targetDirectory.toLowerCase() === currentDirectory.toLowerCase()
         : targetDirectory === currentDirectory) {
         throw new VaultError(400, 'SAME_DIRECTORY', '新目录与当前目录相同，无需迁移。');
       }
-      for (const directory of [this.directory, targetDirectory]) {
+      for (const directory of [this.rootDirectory, targetDirectory]) {
         const path = join(directory, 'vault.write-lock');
         try {
           const handle = await open(path, 'wx', 0o600);
@@ -462,7 +466,7 @@ export class VaultService {
       this.clearPending();
       return {
         previousStoragePath,
-        status: { exists: true, unlocked: false, storagePath: this.storagePath, autoLockMinutes: 5, expiresAt: null, revision: null },
+        status: { exists: true, unlocked: false, storagePath: this.rootStoragePath, autoLockMinutes: 5, expiresAt: null, revision: null },
       };
     } catch (error) {
       if (createdTarget && !committed && targetPath) await unlink(targetPath).catch(() => undefined);

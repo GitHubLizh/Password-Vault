@@ -535,7 +535,9 @@ export class VaultService {
     const input = validate.record(body);
     rejectProfileSelector(input);
     this.checkRevision(session, input.revision);
-    if (input.confirmed !== true || input.storagePath !== this.rootStoragePath) {
+    // The client echoes whatever status() published for this session, which is the current profile's
+    // file rather than the root one; both identify the same store and both are server-published.
+    if (input.confirmed !== true || (input.storagePath !== this.rootStoragePath && input.storagePath !== this.storagePath)) {
       throw new VaultError(400, 'INVALID_INPUT', '请核对当前存储位置并确认迁移。');
     }
     const requestedDirectory = storageDirectory(input.directory);

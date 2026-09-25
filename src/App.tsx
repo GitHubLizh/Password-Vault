@@ -487,8 +487,7 @@ export default function App() {
     if (busyRef.current || !isActive(version) || !sessionRef.current || !status?.storagePath) return;
     const current = sessionRef.current;
     const storagePath = status.storagePath;
-    const targetPath = `${directory.replace(/[\\/]+$/, '')}${directory.includes('\\') ? '\\' : '/'}vault.pvlt`;
-    if (!window.confirm(`确认迁移密码库？\n\n当前文件：${storagePath}\n新文件：${targetPath}\n\n保留原密码库作为历史副本，不再同步；旧备份不搬迁。不会覆盖已有目标文件。完成后所有会话将锁定，后续只使用新位置。`)) return;
+    if (!window.confirm(`确认迁移密码库？\n\n当前位置：${storagePath}\n新位置：${directory}\n\n迁移会复制这里的所有身份档；原目录保留作为历史副本、不再同步，已有的备份文件不搬迁。不会覆盖任何已有文件。完成后所有会话将锁定，后续只使用新位置。`)) return;
     if (busyRef.current || !isActive(version)) return;
     busyRef.current = true;
     sessionChangeRef.current = true;

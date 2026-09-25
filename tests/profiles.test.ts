@@ -395,9 +395,12 @@ test('migration moves every profile together and keeps the abandoned store intac
     const filled = await addEntry(fixture, work, '工作档的条目');
     const workSource = await readVault(await profileVault(fixture, '工作'));
     const target = join(dirname(fixture.directory), `${basename(fixture.directory)}-moved`);
+    // Send back exactly what the UI would: the profile path published by status(), not the root one.
+    const published = success<VaultStatus>(await fixture.api('GET', '/api/status', { token: filled.token })).storagePath;
+    assert.equal(published, await profileVault(fixture, '工作'));
 
     success<StorageLocationResponse>(await fixture.api('POST', '/api/storage-location', {
-      token: filled.token, body: { directory: target, storagePath: fixture.storagePath, revision: filled.vault.revision, confirmed: true },
+      token: filled.token, body: { directory: target, storagePath: published, revision: filled.vault.revision, confirmed: true },
     }));
     await fixture.restart();
     assert.deepEqual((await readdir(target)).sort(), ['vault.pvlt', '工作']);
@@ -421,7 +424,7 @@ test('migration refuses a target already holding a profile vault and leaves ever
     await writeFile(join(target, '工作', 'vault.pvlt'), '{"format":"other"}', 'utf8');
 
     failure(await fixture.api('POST', '/api/storage-location', {
-      token: filled.token, body: { directory: target, storagePath: fixture.storagePath, revision: filled.vault.revision, confirmed: true },
+      token: filled.token, body: { directory: target, storagePath: await profileVault(fixture, '工作'), revision: filled.vault.revision, confirmed: true },
     }), 409, 'TARGET_EXISTS');
     assert.deepEqual(await readdir(target), ['工作'], 'a refused migration must create nothing in the target');
     assert.equal(await readVault(join(target, '工作', 'vault.pvlt')), '{"format":"other"}');

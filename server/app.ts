@@ -3,6 +3,7 @@ import staticFiles from '@fastify/static';
 import { VaultError } from './errors.js';
 import { VaultService } from './vault.js';
 import { StorageLocation } from './storage-location.js';
+import type { FolderPicker } from './folder-picker.js';
 import { record } from './validation.js';
 
 interface AppOptions {
@@ -10,13 +11,14 @@ interface AppOptions {
   origin: string;
   staticDirectory?: string;
   now?: () => number;
+  folderPicker?: FolderPicker;
 }
 
 export function buildApp(options: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: 128 * 1024, requestTimeout: 15000, connectionTimeout: 20000 });
   let service: VaultService;
   app.addHook('onReady', async () => {
-    service = new VaultService(await StorageLocation.load(options.directory), options.now);
+    service = new VaultService(await StorageLocation.load(options.directory), options.now, options.folderPicker);
   });
   const authority = new URL(options.origin).host;
 
@@ -61,6 +63,7 @@ export function buildApp(options: AppOptions) {
   app.get('/api/status', request => service.run(() => service.status(token(request.headers.authorization))));
   app.post('/api/create', request => service.run(() => service.create(record(request.body).password)));
   app.post('/api/unlock', request => service.run(() => service.unlock(record(request.body).password)));
+  app.post('/api/master-password', request => service.run(() => service.changeMasterPassword(token(request.headers.authorization), request.body)));
   app.post('/api/lock', request => service.run(() => service.lock(token(request.headers.authorization))));
   app.post('/api/activity', request => service.run(() => service.activity(token(request.headers.authorization))));
   app.get('/api/vault', request => service.run(() => service.getVault(token(request.headers.authorization))));
@@ -69,6 +72,18 @@ export function buildApp(options: AppOptions) {
   app.delete<{ Params: { id: string } }>('/api/entries/:id', request => service.run(() => service.deleteEntry(token(request.headers.authorization), request.body, request.params.id)));
   app.put('/api/settings', request => service.run(() => service.settings(token(request.headers.authorization), request.body)));
   app.post('/api/storage-location', request => service.run(() => service.changeStorageLocation(token(request.headers.authorization), request.body)));
+  app.post('/api/storage-location/select-folder', async (request, reply) => {
+    request.raw.socket?.setTimeout?.(135000);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    reply.raw.on('close', abort);
+    try {
+      return await service.selectStorageFolder(token(request.headers.authorization), controller.signal);
+    } finally {
+      reply.raw.off('close', abort);
+      request.raw.socket?.setTimeout?.(20000);
+    }
+  });
   app.get('/api/backup', async (request, reply) => {
     const source = await service.run(() => service.backup(token(request.headers.authorization)));
     return reply.header('Content-Disposition', 'attachment; filename="password-vault.pvlt"')
@@ -82,6 +97,6 @@ export function buildApp(options: AppOptions) {
   if (options.staticDirectory) {
     app.register(staticFiles, { root: options.staticDirectory, cacheControl: false, etag: false, lastModified: false, dotfiles: 'deny' });
   }
-  app.addHook('onClose', async () => service?.dispose());
+  app.addHook('preClose', async () => service?.dispose());
   return app;
 }

@@ -261,17 +261,24 @@ test('customize storage, protect existing files and remember the directory acros
   await unlock(page);
   await page.getByRole('button', { name: '设置与备份', exact: true }).click();
   await page.getByRole('button', { name: '修改存储位置', exact: true }).click();
-  const input = page.getByLabel('新存储目录', { exact: true });
+  const selection = page.getByLabel('新存储目录', { exact: true });
   const submit = page.getByRole('button', { name: '迁移并使用新位置', exact: true });
-  await input.fill('relative-directory');
-  await submit.click();
-  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('绝对');
-  await expect(input).toHaveValue('relative-directory');
+  const choose = page.getByRole('button', { name: '选择文件夹', exact: true });
+  await expect(selection).toHaveText('尚未选择文件夹');
+  await expect(page.getByRole('dialog').getByRole('textbox')).toHaveCount(0);
+  await expect(submit).toBeDisabled();
+  let chosenDirectory: string | null = null;
+  await page.route('**/api/storage-location/select-folder', route => route.fulfill({ json: { directory: chosenDirectory } }));
+  await choose.click();
+  await expect(page.getByText('已取消选择，存储位置未改变。')).toBeVisible();
+  await expect(submit).toBeDisabled();
 
   const occupied = join(directory, 'already-occupied');
   await mkdir(occupied);
   await writeFile(join(occupied, 'vault.pvlt'), 'existing-file-must-stay');
-  await input.fill(occupied);
+  chosenDirectory = occupied;
+  await choose.click();
+  await expect(selection).toHaveText(occupied);
   page.once('dialog', dialog => dialog.accept());
   await submit.click();
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('已存在');
@@ -280,11 +287,18 @@ test('customize storage, protect existing files and remember the directory acros
   const originalPath = join(directory, 'vault.pvlt');
   const original = await readFile(originalPath);
   const target = join(await realpath(directory), '自定义 目录');
-  await input.fill(target);
+  await mkdir(target);
+  chosenDirectory = target;
+  await choose.click();
+  await expect(selection).toHaveText(target);
+  chosenDirectory = null;
+  await choose.click();
+  await expect(page.getByText('已取消选择，存储位置未改变。')).toBeVisible();
+  await expect(selection).toHaveText(target);
   page.once('dialog', dialog => dialog.dismiss());
   await submit.click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(input).toHaveValue(target);
+  await expect(selection).toHaveText(target);
   expect((await readdir(directory)).includes('storage-location.json')).toBe(false);
   await page.screenshot({ path: info.outputPath('storage-dialog.png'), fullPage: true });
 
@@ -317,7 +331,8 @@ test('customize storage, protect existing files and remember the directory acros
   await page.screenshot({ path: info.outputPath('storage-settings.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '修改存储位置', exact: true }).click();
-  await expect(input).toBeVisible();
+  await expect(choose).toBeVisible();
+  await expect(selection).toHaveText('尚未选择文件夹');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: info.outputPath('storage-mobile.png'), fullPage: true });
 });
@@ -327,7 +342,10 @@ test('a delayed migration response cannot unlock the page after a manual lock', 
   await page.getByRole('button', { name: '设置与备份', exact: true }).click();
   await page.getByRole('button', { name: '修改存储位置', exact: true }).click();
   const target = join(await realpath(directory), 'delayed-response-target');
-  await page.getByLabel('新存储目录', { exact: true }).fill(target);
+  await mkdir(target);
+  await page.route('**/api/storage-location/select-folder', route => route.fulfill({ json: { directory: target } }));
+  await page.getByRole('button', { name: '选择文件夹', exact: true }).click();
+  await expect(page.getByLabel('新存储目录', { exact: true })).toHaveText(target);
   let deliver!: () => void;
   const delivery = new Promise<void>(resolve => { deliver = resolve; });
   let migrated = false;
@@ -351,4 +369,166 @@ test('a delayed migration response cannot unlock the page after a manual lock', 
   } finally {
     deliver();
   }
+});
+
+test('folder selection errors can retry and closing or locking discards late selections', async ({ page }) => {
+  await unlock(page);
+  await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  const open = page.getByRole('button', { name: '修改存储位置', exact: true });
+  await open.click();
+  let selectionRequests = 0;
+  let release!: () => void;
+  let waiting = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/storage-location/select-folder', async route => {
+    selectionRequests++;
+    if (selectionRequests === 1) {
+      await route.fulfill({ status: 503, json: { code: 'PICKER_FAILED', message: '无法打开文件夹选择窗口，请重试。' } });
+      return;
+    }
+    await waiting;
+    await route.fulfill({ json: { directory: directory } }).catch(() => undefined);
+  });
+  await page.getByRole('button', { name: '选择文件夹', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('请重试');
+  await page.getByRole('button', { name: '选择文件夹', exact: true }).click();
+  await expect(page.getByRole('button', { name: '等待选择文件夹…', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '迁移并使用新位置', exact: true })).toBeDisabled();
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  release();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await open.click();
+  await expect(page.getByLabel('新存储目录', { exact: true })).toHaveText('尚未选择文件夹');
+  waiting = new Promise<void>(resolve => { release = resolve; });
+  await page.getByRole('button', { name: '选择文件夹', exact: true }).click();
+  await expect.poll(() => selectionRequests).toBe(3);
+  await page.getByRole('button', { name: '立即锁定并丢弃未保存内容', exact: true }).click();
+  release();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('.entry-row')).toHaveCount(0);
+});
+
+test('entry forms stay centered with keyboard focus, fixed actions and unsaved-change protection', async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await unlock(page);
+  const centered = async () => {
+    const dialog = page.getByRole('dialog');
+    const box = await dialog.boundingBox();
+    const viewport = page.viewportSize()!;
+    expect(box).not.toBeNull();
+    expect(Math.abs(box!.x + box!.width / 2 - viewport.width / 2)).toBeLessThan(2);
+    expect(Math.abs(box!.y + box!.height / 2 - viewport.height / 2)).toBeLessThan(2);
+    expect(box!.x).toBeGreaterThanOrEqual(15);
+    expect(box!.y).toBeGreaterThanOrEqual(15);
+    const footer = dialog.locator('.modal-footer');
+    const before = await footer.boundingBox();
+    await expect(dialog.getByRole('button', { name: '保存条目', exact: true })).toBeInViewport();
+    await dialog.locator('.modal-body').evaluate(element => { element.scrollTop = element.scrollHeight; });
+    expect(await dialog.locator('.modal-body').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    const after = await footer.boundingBox();
+    expect(Math.abs(before!.y - after!.y)).toBeLessThan(1);
+    await expect(dialog.getByRole('button', { name: '保存条目', exact: true })).toBeInViewport();
+    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await dialog.locator('.modal-body').evaluate(element => { element.scrollTop = 0; });
+  };
+
+  await openEditor(page, '网站与应用');
+  await centered();
+  const name = page.getByLabel('名称 *', { exact: true });
+  await name.focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('用户名 / 账号', { exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('网站 / 应用地址', { exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('密码', { exact: true })).toBeFocused();
+  await name.focus();
+  await page.screenshot({ path: info.outputPath('centered-create-desktop.png'), fullPage: true });
+  await name.fill('不应保存的居中弹窗草稿');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await expect(name).toHaveValue('不应保存的居中弹窗草稿');
+  page.once('dialog', dialog => dialog.accept());
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeFocused();
+
+  await page.locator('.entry-row').filter({ hasText: '网站测试-已编辑' }).click();
+  await page.getByRole('button', { name: '编辑条目', exact: true }).click();
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue('网站测试-已编辑');
+  await centered();
+  await page.screenshot({ path: info.outputPath('centered-edit-desktop.png'), fullPage: true });
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+
+  for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 1280, height: 600 }]) {
+    await page.setViewportSize(viewport);
+    await openEditor(page, 'API 凭据');
+    await centered();
+    await page.screenshot({ path: info.outputPath(`centered-create-${viewport.width}.png`), fullPage: true });
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+    await expect(page.getByRole('dialog')).not.toBeVisible();
+  }
+  expect(errors).toEqual([]);
+});
+
+test('changes the master password from settings and reopens the vault with the new one', async ({ page }) => {
+  const rotated = 'Vault-UI-Rotated-2026-confirmed';
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await unlock(page);
+  await page.getByRole('button', { name: '全部条目', exact: false }).click();
+  const namesBefore = await page.locator('.entry-row strong').allTextContents();
+  expect(namesBefore.length).toBeGreaterThan(0);
+  await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  await page.getByRole('button', { name: '修改主密码', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '修改主密码', exact: true })).toBeVisible();
+  await expect(dialog.getByText('必须提供当前主密码', { exact: false })).toBeVisible();
+
+  await page.getByLabel('当前主密码', { exact: true }).fill(MASTER);
+  await page.getByLabel('新主密码', { exact: true }).fill('short');
+  await page.getByLabel('确认新主密码', { exact: true }).fill('short');
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+  await expect.poll(() => page.getByLabel('新主密码', { exact: true }).evaluate((input: HTMLInputElement) => !input.checkValidity())).toBe(true);
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByLabel('当前主密码', { exact: true })).toHaveValue(MASTER);
+
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await page.getByRole('button', { name: '修改主密码', exact: true }).click();
+  await expect(page.getByLabel('当前主密码', { exact: true })).toHaveValue('');
+
+  await page.getByLabel('当前主密码', { exact: true }).fill(MASTER);
+  await page.getByLabel('新主密码', { exact: true }).fill(rotated);
+  await page.getByLabel('确认新主密码', { exact: true }).fill('Vault-UI-Typo-2026-confirmed');
+  await page.getByRole('button', { name: '确认修改', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('两次输入的新主密码不一致');
+
+  await page.getByLabel('当前主密码', { exact: true }).fill('not-the-master-password');
+  await page.getByLabel('确认新主密码', { exact: true }).fill(rotated);
+  await submitPassword(page, '确认修改');
+  await expect(dialog.getByRole('alert')).toContainText('当前主密码不正确');
+
+  await page.getByLabel('当前主密码', { exact: true }).fill(MASTER);
+  await page.getByLabel('新主密码', { exact: true }).fill(MASTER);
+  await page.getByLabel('确认新主密码', { exact: true }).fill(MASTER);
+  await submitPassword(page, '确认修改');
+  await expect(dialog.getByRole('alert')).toContainText('新主密码不能与当前主密码相同');
+
+  await page.getByLabel('新主密码', { exact: true }).fill(rotated);
+  await page.getByLabel('确认新主密码', { exact: true }).fill(rotated);
+  await submitPassword(page, '确认修改');
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('主密码已修改，请使用新主密码重新解锁');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await page.getByLabel('主密码', { exact: true }).fill(MASTER);
+  await submitPassword(page, '解锁保管库');
+  await expect(page.getByRole('alert')).toContainText('主密码不正确');
+  await page.getByLabel('主密码', { exact: true }).fill(rotated);
+  await submitPassword(page, '解锁保管库');
+  await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeVisible();
+  await expect(page.locator('.entry-row strong').allTextContents()).resolves.toEqual(namesBefore);
 });

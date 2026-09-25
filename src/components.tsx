@@ -36,21 +36,25 @@ export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={iconPaths[name]} /></svg>;
 }
 
-export function Modal({ title, eyebrow, children, onClose, drawer = false, closeDisabled = false, onLock, lockSeconds }: {
-  title: string; eyebrow: string; children: ReactNode; onClose: () => void; drawer?: boolean; closeDisabled?: boolean;
+export function Modal({ title, eyebrow, children, onClose, entryForm = false, closeDisabled = false, onLock, lockSeconds }: {
+  title: string; eyebrow: string; children: ReactNode; onClose: () => void; entryForm?: boolean; closeDisabled?: boolean;
   onLock?: () => void; lockSeconds?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
     const dialog = ref.current;
+    const opener = document.activeElement;
     if (dialog && !dialog.open) {
       dialog.showModal();
-      if (drawer) dialog.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
+      if (entryForm) dialog.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
     }
-    return () => { if (dialog?.open) dialog.close(); };
-  }, [drawer]);
-  return <dialog ref={ref} className={drawer ? 'modal drawer' : 'modal'} aria-modal="true" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!closeDisabled) onClose(); }}>
+    return () => {
+      if (dialog?.open) dialog.close();
+      if (entryForm && opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, [entryForm]);
+  return <dialog ref={ref} className={entryForm ? 'modal entry-modal' : 'modal'} aria-modal="true" aria-labelledby={titleId} onCancel={event => { event.preventDefault(); if (!closeDisabled) onClose(); }}>
     <header className="modal-header"><div><p className="eyebrow">{eyebrow}</p><h2 id={titleId}>{title}</h2></div><div className="modal-header-actions">{onLock && <button className="icon-button" type="button" aria-label="立即锁定并丢弃未保存内容" title="立即锁定并丢弃未保存内容" onClick={onLock}><Icon name="lock" size={18} /></button>}<button className="icon-button" type="button" aria-label="关闭对话框" onClick={onClose} disabled={closeDisabled}><Icon name="close" /></button></div></header>
     {lockSeconds !== undefined && lockSeconds <= 30 && <div className="message warning modal-lock-warning" role="alert"><Icon name="clock" /><span>30 秒内将自动锁定，未保存内容会丢失。继续操作可续期。</span><strong aria-hidden="true">{lockSeconds}s</strong></div>}
     {children}
@@ -100,7 +104,7 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
   };
   const field = (key: Exclude<keyof EntryInput, 'type' | 'notes'>, label: string, maxLength: number, options: { secret?: boolean; placeholder?: string; required?: boolean } = {}) => <div className="form-field" key={key}>
     <label htmlFor={`${id}-${key}`}>{label}{options.required && <span className="required"> *</span>}</label>
-    <input id={`${id}-${key}`} value={draft[key]} onChange={event => setDraft(previous => ({ ...previous, [key]: event.target.value }))} type={options.secret ? 'password' : 'text'} autoComplete={options.secret ? 'new-password' : 'off'} spellCheck={false} maxLength={maxLength} required={options.required} placeholder={options.placeholder} inputMode={key === 'port' ? 'numeric' : undefined} autoFocus={key === 'name'} disabled={busy} />
+    <input id={`${id}-${key}`} value={draft[key]} onChange={event => setDraft(previous => ({ ...previous, [key]: event.target.value }))} type={options.secret ? 'password' : 'text'} autoComplete={options.secret ? 'new-password' : 'off'} spellCheck={false} maxLength={maxLength} required={options.required} placeholder={options.placeholder} inputMode={key === 'port' ? 'numeric' : undefined} disabled={busy} />
   </div>;
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -111,7 +115,7 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
     if (reloaded && entry && !window.confirm('最新密码库已重新载入。继续保存会用当前草稿替换这条记录，请确认已核对修改。')) return;
     onSave(draft);
   };
-  return <Modal title={entry ? '编辑条目' : '添加新条目'} eyebrow={entry ? 'EDIT ITEM' : 'NEW ITEM'} onClose={close} drawer closeDisabled={busy} onLock={onLock} lockSeconds={lockSeconds}>
+  return <Modal title={entry ? '编辑条目' : '添加新条目'} eyebrow={entry ? 'EDIT ITEM' : 'NEW ITEM'} onClose={close} entryForm closeDisabled={busy} onLock={onLock} lockSeconds={lockSeconds}>
     <form className="editor-form" onSubmit={submit} autoComplete="off" aria-busy={busy}>
       <div className="modal-body">
         <div className="message subtle"><Icon name="lock" /><span>草稿仅暂存于本页。手动或自动锁定都会丢弃未保存的内容。</span></div>
@@ -134,38 +138,113 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
   </Modal>;
 }
 
-export function StorageLocationDialog({ storagePath, busy, error, onClose, onSubmit, onLock, lockSeconds }: {
-  storagePath: string; busy: boolean; error: string; onClose: () => void;
+export function ChangeMasterPasswordDialog({ busy, error, conflict, onClose, onSubmit, onReload, onLock, lockSeconds }: {
+  busy: boolean; error: string; conflict: boolean; onClose: () => void;
+  onSubmit: (currentPassword: string, newPassword: string, confirmPassword: string) => void;
+  onReload: () => void; onLock: () => void; lockSeconds: number;
+}) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [validation, setValidation] = useState('');
+  const id = useId();
+  const clearPasswords = () => { setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); };
+  useEffect(() => {
+    if (busy) { setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); }
+  }, [busy]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (busy || conflict) return;
+    if (currentPassword.length < 1 || currentPassword.length > 1024) { setValidation('当前主密码需要 1–1024 个字符。'); return; }
+    if (newPassword.length < 12 || newPassword.length > 1024) { setValidation('新主密码需要 12–1024 个字符。'); return; }
+    if (newPassword !== confirmPassword) { setValidation('两次输入的新主密码不一致，请修改后重试。'); return; }
+    if (currentPassword === newPassword) { setValidation('新主密码不能与当前主密码相同。'); return; }
+    setValidation('');
+    onSubmit(currentPassword, newPassword, confirmPassword);
+    clearPasswords();
+  };
+  return <Modal title="修改主密码" eyebrow="MASTER PASSWORD" onClose={onClose} closeDisabled={busy} onLock={onLock} lockSeconds={busy ? undefined : lockSeconds}>
+    <form onSubmit={submit} autoComplete="off" aria-busy={busy}>
+      <div className="modal-body">
+        <div className="message warning"><Icon name="info" /><span>此功能不是找回密码，必须提供当前主密码。旧备份及历史迁移副本不会改变，仍需使用各自对应的旧主密码。</span></div>
+        <p className="body-copy">凭据内容不会改变。修改成功后会锁定所有会话，请使用新主密码重新解锁，并重新导出加密备份。</p>
+        <div className="form-field"><label htmlFor={`${id}-current`}>当前主密码</label><input ref={input => { input?.setAttribute('autofocus', ''); }} id={`${id}-current`} type="password" autoComplete="off" value={currentPassword} onChange={event => { setCurrentPassword(event.target.value); setValidation(''); }} required minLength={1} maxLength={1024} disabled={busy} autoFocus /></div>
+        <div className="form-field"><label htmlFor={`${id}-new`}>新主密码</label><input id={`${id}-new`} type="password" autoComplete="new-password" value={newPassword} onChange={event => { setNewPassword(event.target.value); setValidation(''); }} required minLength={12} maxLength={1024} disabled={busy} /></div>
+        <div className="form-field"><label htmlFor={`${id}-confirm`}>确认新主密码</label><input id={`${id}-confirm`} type="password" autoComplete="new-password" value={confirmPassword} onChange={event => { setConfirmPassword(event.target.value); setValidation(''); }} required maxLength={1024} disabled={busy} /></div>
+        <p className="field-hint">新主密码至少 12 个字符。密码原样提交，不会移除空格；提交后输入立即清空。</p>
+        {(validation || error) && <ErrorMessage>{validation || error}</ErrorMessage>}
+        {conflict && <div className="conflict-note"><p>库版本已变化，请先重新载入最新密码库，再重新输入主密码提交。不会自动覆盖其他修改。</p><button type="button" className="button secondary" onClick={() => { clearPasswords(); setValidation(''); onReload(); }} disabled={busy}>重新载入最新密码库</button></div>}
+        {busy && <p className="message subtle" role="status">正在处理，请勿重复提交。修改期间暂停会话续期，仍会自动锁定。</p>}
+      </div>
+      <footer className="modal-footer"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button><button className="button primary" type="submit" disabled={busy || conflict}>{busy ? '正在处理…' : '确认修改'}</button></footer>
+    </form>
+  </Modal>;
+}
+
+export function StorageLocationDialog({ token, storagePath, busy, error, onClose, onSubmit, onLock, lockSeconds, onFailure, onClearError }: {
+  token: string; storagePath: string; busy: boolean; error: string; onClose: () => void;
   onSubmit: (directory: string) => void; onLock: () => void; lockSeconds: number;
+  onFailure: (error: unknown) => boolean; onClearError: () => void;
 }) {
   const [directory, setDirectory] = useState('');
   const [validation, setValidation] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [selectionNotice, setSelectionNotice] = useState('');
+  const selectionRef = useRef<AbortController | null>(null);
   const id = useId();
+  useEffect(() => () => { selectionRef.current?.abort(); }, [token]);
+  const chooseFolder = async () => {
+    if (busy || selectionRef.current) return;
+    const controller = new AbortController();
+    selectionRef.current = controller;
+    setPicking(true);
+    setValidation('');
+    setSelectionNotice('');
+    onClearError();
+    try {
+      const result = await api.selectStorageFolder(token, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.directory !== null) {
+        setDirectory(result.directory);
+        setSelectionNotice('文件夹已选择，确认迁移后才会修改存储位置。');
+      } else {
+        setSelectionNotice('已取消选择，存储位置未改变。');
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted && !onFailure(cause)) {
+        setValidation(cause instanceof Error ? cause.message : '无法打开文件夹选择窗口，请重试。');
+      }
+    } finally {
+      if (!controller.signal.aborted) setPicking(false);
+      if (selectionRef.current === controller) selectionRef.current = null;
+    }
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
-    const value = directory.trim();
-    if (!value) { setValidation('请输入新存储目录。'); return; }
-    if (!/^(?:[A-Za-z]:[\\/]|\/(?!\/))/.test(value)) {
-      setValidation('请输入本机绝对目录，不支持相对路径或 UNC 网络路径。');
-      return;
-    }
+    if (busy || picking) return;
+    if (!directory) { setValidation('请先选择一个文件夹。'); return; }
     setValidation('');
-    onSubmit(value);
+    onSubmit(directory);
   };
   return <Modal title="修改存储位置" eyebrow="STORAGE LOCATION" onClose={onClose} closeDisabled={busy} onLock={onLock} lockSeconds={busy ? undefined : lockSeconds}>
-    <form className="storage-location-form" onSubmit={submit} autoComplete="off" aria-busy={busy}>
+    <form className="storage-location-form" onSubmit={submit} autoComplete="off" aria-busy={busy || picking}>
       <div className="modal-body">
         <p className="storage-path-label">当前文件</p><code className="path-block">{storagePath}</code>
-        <div className="form-field"><label htmlFor={`${id}-directory`}>新存储目录</label><input id={`${id}-directory`} type="text" value={directory} onChange={event => { setDirectory(event.target.value); setValidation(''); }} required disabled={busy} autoFocus autoComplete="off" autoCapitalize="none" spellCheck={false} aria-describedby={`${id}-hint`} aria-invalid={!!validation} placeholder="输入本机绝对目录" /></div>
-        <p className="field-hint" id={`${id}-hint`}>请输入目录，不是文件名；文件名固定为 vault.pvlt。仅支持本机绝对目录，不存在的目录会自动创建。</p>
+        <div className="form-field folder-selection">
+          <label htmlFor={`${id}-directory`}>新存储目录</label>
+          <output id={`${id}-directory`} className={`selected-folder${directory ? '' : ' empty'}`} aria-describedby={`${id}-hint`}>{directory || '尚未选择文件夹'}</output>
+          <button className="button secondary" type="button" onClick={() => void chooseFolder()} disabled={busy || picking}><Icon name="file" size={17} />{picking ? '等待选择文件夹…' : '选择文件夹'}</button>
+        </div>
+        <p className="field-hint" id={`${id}-hint`}>点击按钮，在 Windows 窗口中选择本机文件夹，也可以新建文件夹；文件名固定为 vault.pvlt。</p>
+        {picking && <p className="message subtle" role="status">请在系统窗口中选择文件夹；如果未看到窗口，请检查任务栏。取消不会改变存储位置，等待期间仍会自动锁定。</p>}
+        {selectionNotice && <p className="field-hint" role="status">{selectionNotice}</p>}
         <div className="message warning"><Icon name="info" /><span>不推荐使用云同步盘或可拔出介质。迁移不会覆盖已有目标文件；完成后所有会话都会锁定。</span></div>
         <p className="storage-migration-note">原密码库会保留为历史副本，不再同步；旧备份不搬迁，仍留在旧目录。后续只写入新目录。</p>
         <p className="field-hint">目录偏好保存在原启动配置目录的 storage-location.json 中，请保留该配置文件，重启后会继续使用新位置。</p>
         {(validation || error) && <ErrorMessage>{validation || error}</ErrorMessage>}
         {busy && <p className="message subtle" role="status">正在迁移，请勿重复提交。迁移期间暂停会话续期，仍会自动锁定。</p>}
       </div>
-      <footer className="modal-footer"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button><button className="button primary" type="submit" disabled={busy}>{busy ? '正在迁移…' : '迁移并使用新位置'}</button></footer>
+      <footer className="modal-footer"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button><button className="button primary" type="submit" disabled={busy || picking || !directory}>{busy ? '正在迁移…' : '迁移并使用新位置'}</button></footer>
     </form>
   </Modal>;
 }

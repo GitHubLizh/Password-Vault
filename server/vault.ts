@@ -1,10 +1,11 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
+import type { ChangeMasterPasswordResponse, FolderSelectionResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
 import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './crypto.js';
 import { VaultError } from './errors.js';
 import { StorageLocation, storageDirectory } from './storage-location.js';
+import { pickFolder, type FolderPicker } from './folder-picker.js';
 import * as validate from './validation.js';
 
 interface Session {
@@ -47,9 +48,10 @@ export class VaultService {
   private tail: Promise<unknown> = Promise.resolve();
   private queued = 0;
   private nextAttemptAt = 0;
+  private activePicker?: AbortController;
   private readonly timer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly location: StorageLocation, private readonly now = Date.now) {
+  constructor(private readonly location: StorageLocation, private readonly now = Date.now, private readonly folderPicker: FolderPicker = pickFolder) {
     this.timer = setInterval(() => this.expire(), 1000);
     this.timer.unref();
   }
@@ -60,6 +62,14 @@ export class VaultService {
     const result = this.tail.then(async () => {
       try {
         await this.location.assertCurrent();
+        if (this.session) {
+          const source = await this.readSource();
+          if (source === null || (fingerprint(source) !== this.session.fingerprint
+            && parseEnvelope(source).salt !== this.session.salt.toString('base64'))) {
+            this.clearSession();
+            this.clearPending();
+          }
+        }
       } catch (error) {
         this.clearSession();
         this.clearPending();
@@ -84,6 +94,7 @@ export class VaultService {
   private clearSession(): void {
     this.session?.key.fill(0);
     this.session = undefined;
+    this.activePicker?.abort();
   }
 
   private clearPending(): void {
@@ -125,7 +136,7 @@ export class VaultService {
     return readFile(this.storagePath, 'utf8');
   }
 
-  private async atomicWrite(source: string, expected: string | null, safetyBackup = false): Promise<string | undefined> {
+  private async atomicWrite(source: string, expected: string | null, safetyBackup = false, beforeReplace?: () => void): Promise<string | undefined> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const guardPath = join(this.directory, 'vault.write-lock');
     let guard;
@@ -162,12 +173,13 @@ export class VaultService {
       } finally {
         await temporary.close();
       }
+      beforeReplace?.();
       await rename(temporaryPath, this.storagePath);
       return backupPath;
     } finally {
       await unlink(temporaryPath).catch(() => undefined);
-      await guard.close();
-      await unlink(guardPath);
+      await guard.close().catch(() => undefined);
+      await unlink(guardPath).catch(() => undefined);
     }
   }
 
@@ -234,6 +246,47 @@ export class VaultService {
     } catch (error) {
       key.fill(0);
       throw error;
+    }
+  }
+
+  async changeMasterPassword(token: string | undefined, body: unknown): Promise<ChangeMasterPasswordResponse> {
+    const session = this.requireSession(token);
+    const input = validate.record(body);
+    this.checkRevision(session, input.revision);
+    const currentPassword = validate.password(input.currentPassword);
+    const newPassword = validate.password(input.newPassword, true);
+    const confirmPassword = validate.password(input.confirmPassword, true);
+    if (newPassword !== confirmPassword) {
+      throw new VaultError(400, 'PASSWORD_MISMATCH', '两次输入的新主密码不一致。');
+    }
+    if (newPassword === currentPassword) {
+      throw new VaultError(400, 'NEW_PASSWORD_UNCHANGED', '新主密码不能与当前主密码相同。');
+    }
+    this.throttle();
+    await this.backup(token);
+    let currentKey: Buffer | undefined;
+    let newKey: Buffer | undefined;
+    try {
+      currentKey = await deriveKey(currentPassword, session.salt);
+      this.requireSession(token);
+      if (!timingSafeEqual(currentKey, session.key)) {
+        throw new VaultError(400, 'WRONG_MASTER_PASSWORD', '当前主密码不正确，请重新输入。');
+      }
+      const salt = randomBytes(16);
+      newKey = await deriveKey(newPassword, salt);
+      this.requireSession(token);
+      const vault = structuredClone(session.vault);
+      vault.revision++;
+      const source = encrypt(vault, newKey, salt);
+      await this.atomicWrite(source, session.fingerprint, false, () => { this.requireSession(token); });
+      this.clearSession();
+      this.clearPending();
+      return {
+        status: { exists: true, unlocked: false, storagePath: this.storagePath, autoLockMinutes: 5, expiresAt: null, revision: null },
+      };
+    } finally {
+      currentKey?.fill(0);
+      newKey?.fill(0);
     }
   }
 
@@ -310,6 +363,38 @@ export class VaultService {
   private checkRevision(session: Session, rawRevision: unknown): void {
     if (validate.revision(rawRevision) !== session.vault.revision) {
       throw new VaultError(409, 'REVISION_CONFLICT', '数据已被其他操作修改，请重新载入最新数据再保存。');
+    }
+  }
+
+  async selectStorageFolder(token: string | undefined, signal: AbortSignal): Promise<FolderSelectionResponse> {
+    const controller = new AbortController();
+    await this.run(() => {
+      this.requireSession(token);
+      if (signal.aborted) throw new VaultError(409, 'PICKER_CANCELLED', '文件夹选择已取消。');
+      if (this.activePicker) throw new VaultError(409, 'PICKER_BUSY', '已有文件夹选择窗口打开，请先完成或取消选择。');
+      this.activePicker = controller;
+    });
+    const abort = () => controller.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) controller.abort();
+    try {
+      // Native dialogs must not hold the write queue: lock and status still need to run.
+      const selected = await this.folderPicker(this.directory, controller.signal);
+      return await this.run(async () => {
+        this.requireSession(token);
+        if (controller.signal.aborted) throw new VaultError(409, 'PICKER_CANCELLED', '文件夹选择已取消。');
+        if (selected === null) return { directory: null };
+        const directory = storageDirectory(await realpath(storageDirectory(selected)));
+        if (!(await stat(directory)).isDirectory()) throw new VaultError(400, 'INVALID_DIRECTORY', '请选择一个本机文件夹。');
+        return { directory };
+      });
+    } catch (error) {
+      await this.run(() => this.requireSession(token));
+      if (error instanceof VaultError) throw error;
+      throw new VaultError(503, 'PICKER_FAILED', '无法读取所选文件夹，请确认文件夹可访问后重试。');
+    } finally {
+      signal.removeEventListener('abort', abort);
+      if (this.activePicker === controller) this.activePicker = undefined;
     }
   }
 

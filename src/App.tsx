@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AutoLockMinutes, EntryInput, EntryType, SessionResponse, VaultEntry, VaultResponse, VaultStatus } from '../shared/types';
 import { api, ApiError } from './api';
-import { EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, typeNames } from './components';
+import { ChangeMasterPasswordDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, typeNames } from './components';
 import type { IconName } from './components';
 
 type Category = 'all' | EntryType;
@@ -53,6 +53,8 @@ export default function App() {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
+  const [masterPasswordOpen, setMasterPasswordOpen] = useState(false);
+  const [masterPasswordReloadRequired, setMasterPasswordReloadRequired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [lockPending, setLockPending] = useState(false);
@@ -67,8 +69,8 @@ export default function App() {
   const expiryVersion = useRef(0);
   const alive = useRef(true);
   const busyRef = useRef(false);
-  const migrationRef = useRef(false);
-  const migrationVersion = useRef(0);
+  const sessionChangeRef = useRef(false);
+  const sessionChangeVersion = useRef(0);
   const lastActivity = useRef(0);
 
   // Every logout and new session invalidates ALL earlier asynchronous work.
@@ -78,12 +80,14 @@ export default function App() {
     expiryVersion.current += 1;
     sessionRef.current = null;
     busyRef.current = false;
-    migrationRef.current = false;
+    sessionChangeRef.current = false;
     lastActivity.current = 0;
     setSession(null);
     setEditor(null);
     setRestoreOpen(false);
     setStorageOpen(false);
+    setMasterPasswordOpen(false);
+    setMasterPasswordReloadRequired(false);
     setSearch('');
     setSelectedId(null);
     setMobileDetail(false);
@@ -163,6 +167,8 @@ export default function App() {
     setEditor(null);
     setRestoreOpen(false);
     setStorageOpen(false);
+    setMasterPasswordOpen(false);
+    setMasterPasswordReloadRequired(false);
     setAuthBusy(false);
     setBusy(null);
     setLockPending(false);
@@ -222,13 +228,13 @@ export default function App() {
       setNow(Date.now());
     };
     const check = async () => {
-      if (checking || migrationRef.current || !isActive(version)) return;
+      if (checking || sessionChangeRef.current || !isActive(version)) return;
       checking = true;
       const expiryAtStart = expiryVersion.current;
-      const migrationAtStart = migrationVersion.current;
+      const sessionChangeAtStart = sessionChangeVersion.current;
       try {
         const result = await api.status(token);
-        if (migrationRef.current || migrationVersion.current !== migrationAtStart || !isActive(version)) return;
+        if (sessionChangeRef.current || sessionChangeVersion.current !== sessionChangeAtStart || !isActive(version)) return;
         if (!result.unlocked) {
           clearSensitive('会话已到期或已在另一页面重新解锁，本页敏感内容已清空。');
           return;
@@ -236,19 +242,19 @@ export default function App() {
         setStatus(result);
         if (result.expiresAt !== null) updateExpiry(result.expiresAt, expiryAtStart);
       } catch (cause) {
-        if (!migrationRef.current && migrationVersion.current === migrationAtStart && isCurrent(version) && !handleFailure(cause, version)) lock('无法核验会话状态，已锁定密码库。请稍后重新解锁。');
+        if (!sessionChangeRef.current && sessionChangeVersion.current === sessionChangeAtStart && isCurrent(version) && !handleFailure(cause, version)) lock('无法核验会话状态，已锁定密码库。请稍后重新解锁。');
       } finally { checking = false; }
     };
     const activity = (event: Event) => {
-      if (!event.isTrusted || migrationRef.current || !isActive(version) || renewing || Date.now() - lastActivity.current < 10_000) return;
+      if (!event.isTrusted || sessionChangeRef.current || !isActive(version) || renewing || Date.now() - lastActivity.current < 10_000) return;
       lastActivity.current = Date.now();
       renewing = true;
       const expiryAtStart = expiryVersion.current;
-      const migrationAtStart = migrationVersion.current;
+      const sessionChangeAtStart = sessionChangeVersion.current;
       void api.activity(token).then(result => {
-        if (!migrationRef.current && migrationVersion.current === migrationAtStart) updateExpiry(result.expiresAt, expiryAtStart);
+        if (!sessionChangeRef.current && sessionChangeVersion.current === sessionChangeAtStart) updateExpiry(result.expiresAt, expiryAtStart);
       }).catch(cause => {
-        if (!migrationRef.current && migrationVersion.current === migrationAtStart && isCurrent(version) && !handleFailure(cause, version)) lock('无法续期会话，密码库已锁定。请重新解锁。');
+        if (!sessionChangeRef.current && sessionChangeVersion.current === sessionChangeAtStart && isCurrent(version) && !handleFailure(cause, version)) lock('无法续期会话，密码库已锁定。请重新解锁。');
       }).finally(() => { renewing = false; });
     };
     const tick = () => { if (isActive(version)) setNow(Date.now()); };
@@ -311,8 +317,9 @@ export default function App() {
   };
   const reload = () => void runMutation('正在重新载入…', current => api.vault(current.token), result => {
     setEditor(previous => previous ? { ...previous, revision: result.vault.revision, reloaded: true } : null);
+    setMasterPasswordReloadRequired(false);
     if (!result.vault.entries.some(entry => entry.id === selectedId)) { setSelectedId(sorted(result.vault.entries)[0]?.id ?? null); setMobileDetail(false); }
-    setNotice('已重新载入最新版本。未保存的编辑仍保留，请核对后再提交。');
+    setNotice(masterPasswordOpen ? '已重新载入最新版本，请重新输入主密码后提交。' : '已重新载入最新版本。未保存的编辑仍保留，请核对后再提交。');
   });
   const saveEntry = (input: EntryInput) => {
     if (!editor) return;
@@ -363,6 +370,49 @@ export default function App() {
       if (isCurrent(version)) { busyRef.current = false; setBusy(null); }
     }
   };
+  const changeMasterPassword = async (currentPassword: string, newPassword: string, confirmPassword: string) => {
+    const version = epoch.current;
+    if (busyRef.current || !isActive(version) || !sessionRef.current || masterPasswordReloadRequired) return;
+    const current = sessionRef.current;
+    busyRef.current = true;
+    sessionChangeRef.current = true;
+    sessionChangeVersion.current += 1;
+    setBusy('正在修改主密码…');
+    setError('');
+    setNotice('');
+    setConflict(false);
+    try {
+      const result = await api.changeMasterPassword(current.token, currentPassword, newPassword, confirmPassword, current.vault.revision);
+      if (!isActive(version)) {
+        if (alive.current && !sessionRef.current) setStatusAttempt(previous => previous + 1);
+        return;
+      }
+      clearSensitive('主密码已修改，请使用新主密码重新解锁，并重新导出加密备份。');
+      setStatus(result.status);
+    } catch (cause) {
+      if (!isActive(version)) return;
+      if (handleFailure(cause, version)) {
+        if (cause instanceof ApiError && cause.status === 0) setError('主密码修改结果待确认。请检查本地服务后尝试使用新主密码重新解锁；请勿假定原主密码仍然有效。');
+        return;
+      }
+      const messages: Record<string, string> = {
+        WRONG_MASTER_PASSWORD: '当前主密码不正确，请重新输入后重试。',
+        NEW_PASSWORD_UNCHANGED: '新主密码不能与当前主密码相同。',
+        PASSWORD_MISMATCH: '两次输入的新主密码不一致，请重新输入。',
+        INVALID_INPUT: '请检查输入：当前主密码 1–1024 个字符，新主密码 12–1024 个字符，确认密码必须一致。',
+        REVISION_CONFLICT: '库版本已变化，请重新载入最新密码库后再提交。',
+        FILE_CHANGED: '密码库文件已变化，请锁定并重新解锁后再试。',
+        FILE_BUSY: '密码库文件正忙，请稍后重试。',
+      };
+      setError(cause instanceof ApiError ? cause.status === 429 ? '尝试过于频繁，请稍后重试。' : cause.status === 500 ? '主密码修改写入失败，原主密码仍有效。请稍后重试。' : messages[cause.code] ?? errorText(cause) : errorText(cause));
+      if (cause instanceof ApiError && cause.code === 'REVISION_CONFLICT') {
+        setMasterPasswordReloadRequired(true);
+        setConflict(true);
+      }
+    } finally {
+      if (isCurrent(version)) { busyRef.current = false; sessionChangeRef.current = false; setBusy(null); }
+    }
+  };
   const changeStorageLocation = async (directory: string) => {
     const version = epoch.current;
     if (busyRef.current || !isActive(version) || !sessionRef.current || !status?.storagePath) return;
@@ -372,9 +422,9 @@ export default function App() {
     if (!window.confirm(`确认迁移密码库？\n\n当前文件：${storagePath}\n新文件：${targetPath}\n\n保留原密码库作为历史副本，不再同步；旧备份不搬迁。不会覆盖已有目标文件。完成后所有会话将锁定，后续只使用新位置。`)) return;
     if (busyRef.current || !isActive(version)) return;
     busyRef.current = true;
-    migrationRef.current = true;
-    // Also discard status/activity requests that began before this migration.
-    migrationVersion.current += 1;
+    sessionChangeRef.current = true;
+    // Discard status/activity responses from before the session change.
+    sessionChangeVersion.current += 1;
     setBusy('正在迁移密码库…');
     setError('');
     setNotice('');
@@ -396,7 +446,7 @@ export default function App() {
       }
       setError(errorText(cause));
     } finally {
-      if (isCurrent(version)) { busyRef.current = false; migrationRef.current = false; setBusy(null); }
+      if (isCurrent(version)) { busyRef.current = false; sessionChangeRef.current = false; setBusy(null); }
     }
   };
   const openEditor = (entry?: VaultEntry) => {
@@ -448,7 +498,7 @@ export default function App() {
         </aside>
         <main className={`main-workspace${view === 'settings' ? ' settings-view' : ''}${mobileDetail && selected ? ' showing-detail' : ''}`}>
           <div className="workspace-messages">
-            {seconds <= 30 && <div className="message warning" role="alert"><Icon name="clock" /><span>{migrationRef.current ? '迁移期间暂停续期，仍会自动锁定。' : '即将自动锁定，未保存的草稿会丢失。请继续操作以续期。'}</span><strong>{remaining}</strong></div>}
+            {seconds <= 30 && <div className="message warning" role="alert"><Icon name="clock" /><span>{sessionChangeRef.current ? '迁移期间暂停续期，仍会自动锁定。' : '即将自动锁定，未保存的草稿会丢失。请继续操作以续期。'}</span><strong>{remaining}</strong></div>}
             {error && !editor && !storageOpen && <ErrorMessage>{error}</ErrorMessage>}
             {conflict && !editor && <div className="message warning"><span>库版本已变化，本次操作没有覆盖其他修改。</span><button onClick={reload} disabled={!!busy}>重新载入</button></div>}
             {remoteChanged && !conflict && <div className="message subtle"><span>检测到密码库的新版本，请重新载入后再编辑。</span><button onClick={reload} disabled={!!busy}>重新载入</button></div>}
@@ -462,6 +512,7 @@ export default function App() {
           </section><section className="detail-pane" aria-label="条目详情">{selected ? <EntryDetail key={`${selected.id}-${selected.updatedAt}`} entry={selected} busy={!!busy} onEdit={() => openEditor(selected)} onDelete={() => removeEntry(selected)} onBack={backToList} focusOnOpen={mobileDetail} /> : <div className="detail-placeholder"><div className="placeholder-art"><Icon name="shield" size={48} /></div><p className="eyebrow">A LITTLE MORE PEACE OF MIND</p><h2>每一个秘密，都值得被保管</h2><p>从左侧选择一条记录，查看你的凭据。<br />没有条目时，可以先添加一个。</p><span><Icon name="lock" size={14} />本地保存，默认隐藏秘密</span></div>}</section></div> : <section className="settings-content" aria-labelledby="settings-title"><p className="eyebrow">MAKE YOURSELF AT HOME</p><h1 id="settings-title">设置与备份</h1><p className="section-description">按你的节奏保护凭据，为重要内容留一份备份。</p>
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="clock" /></span><div><h2>自动锁定</h2><p>没有实际操作时，自动清空敏感视图并锁定会话。</p></div></div><form onSubmit={event => { event.preventDefault(); void runMutation('正在保存设置…', current => api.settings(current.token, settingChoice, current.vault.revision), () => setNotice('自动锁定设置已保存。')); }}><label htmlFor="auto-lock">无操作等待时间</label><div className="settings-controls"><select id="auto-lock" value={settingChoice} onChange={event => setSettingChoice(Number(event.target.value) as AutoLockMinutes)} disabled={!!busy}><option value={1}>1 分钟</option><option value={5}>5 分钟（推荐）</option><option value={15}>15 分钟</option></select><button type="submit" className="button primary" disabled={!!busy || conflict || settingChoice === session.vault.settings.autoLockMinutes}>保存设置</button></div></form><p className="field-hint">锁定会丢弃未保存的草稿；刷新页面也需要重新解锁。</p></section>
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="file" /></span><div><h2>密码库文件</h2><p>文件由本地服务管理，界面不会自动打开路径或地址。</p></div></div><p className="storage-path-label">当前存储位置</p><code className="path-block">{status?.storagePath || '正在获取文件位置…'}</code><button className="button secondary storage-change-button" onClick={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setStorageOpen(true); }} disabled={!!busy || !status?.storagePath}><Icon name="edit" size={17} />修改存储位置</button></section>
+            <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="lock" /></span><div><h2>主密码</h2><p>修改必须提供当前主密码。成功后本页会立即锁定，需用新主密码重新解锁。</p></div></div><p className="field-hint">旧备份和历史迁移副本不会改变，仍需使用各自对应的旧主密码。修改后请重新导出加密备份。</p><button className="button secondary storage-change-button" onClick={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setMasterPasswordOpen(true); }} disabled={!!busy}><Icon name="edit" size={17} />修改主密码</button></section>
             <section className="settings-card"><div className="settings-card-title"><span className="round-icon small-round"><Icon name="shield" /></span><div><h2>备份与恢复</h2><p>备份是加密文件，恢复时仍需备份的主密码。</p></div></div><div className="backup-action"><div><h3>导出加密备份</h3><p>建议定期备份，并将备份保存在安全的位置。</p></div><button className="button secondary" onClick={() => void exportBackup()} disabled={!!busy}><Icon name="download" size={17} />导出备份</button></div><div className="backup-action"><div><h3>从备份恢复</h3><p>整库替换，不会合并。覆盖前会创建当前库的安全副本。</p></div><button className="button secondary" onClick={() => setRestoreOpen(true)} disabled={!!busy}><Icon name="upload" size={17} />恢复备份</button></div></section>
             <p className="settings-disclaimer"><Icon name="info" size={17} />请牢记主密码。忘记主密码后，无法找回密码库或解密备份。</p>
           </section>}
@@ -469,7 +520,8 @@ export default function App() {
       </div><footer className="app-footer"><span><Icon name="shield" size={13} />本地优先，隐私为本</span><span>未保存的草稿会在锁定时丢弃</span></footer>
     </div>}
     {editor && session && <EntryEditor entry={editor.entry} initialType={editor.type} busy={!!busy} error={error} conflict={conflict} reloaded={editor.reloaded} onClose={() => { setEditor(null); setError(''); setConflict(false); }} onSave={saveEntry} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
-    {storageOpen && session && <StorageLocationDialog storagePath={status?.storagePath ?? ''} busy={!!busy} error={error} onClose={() => { if (!busyRef.current) { setStorageOpen(false); setError(''); } }} onSubmit={directory => void changeStorageLocation(directory)} onLock={() => lock()} lockSeconds={seconds} />}
+    {storageOpen && session && <StorageLocationDialog token={session.token} storagePath={status?.storagePath ?? ''} busy={!!busy} error={error} onClose={() => { if (!busyRef.current) { setStorageOpen(false); setError(''); } }} onSubmit={directory => void changeStorageLocation(directory)} onLock={() => lock()} lockSeconds={seconds} onFailure={cause => handleFailure(cause, currentEpoch)} onClearError={() => setError('')} />}
     {restoreOpen && <RestoreDialog token={session?.token} hasVault={status?.exists ?? false} onClose={() => setRestoreOpen(false)} onSuccess={result => installSession(result, currentEpoch)} onFailure={cause => handleFailure(cause, currentEpoch)} onLock={session ? () => lock() : undefined} lockSeconds={session ? seconds : undefined} />}
+    {masterPasswordOpen && session && <ChangeMasterPasswordDialog busy={!!busy} error={error} conflict={conflict} onClose={() => { if (!busyRef.current) { setMasterPasswordOpen(false); setMasterPasswordReloadRequired(false); setError(''); } }} onSubmit={(current, next, confirm) => void changeMasterPassword(current, next, confirm)} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
   </>;
 }

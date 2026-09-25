@@ -44,6 +44,14 @@ export interface StorageLocationResponse {
   previousStoragePath: string;
 }
 
+export interface FolderSelectionResponse {
+  directory: string | null;
+}
+
+export interface ChangeMasterPasswordResponse {
+  status: VaultStatus;
+}
+
 export interface SessionResponse extends VaultResponse {
   token: string;
   safetyBackupPath?: string;

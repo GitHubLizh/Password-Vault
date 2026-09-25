@@ -1,6 +1,8 @@
 import type {
   AutoLockMinutes,
+  ChangeMasterPasswordResponse,
   EntryInput,
+  FolderSelectionResponse,
   RestorePreview,
   SessionResponse,
   StorageLocationResponse,
@@ -18,13 +20,13 @@ export class ApiError extends Error {
 // Credentials deliberately live only in the caller's memory, never in browser storage.
 async function request<T>(
   path: string,
-  options: { method?: string; token?: string; body?: unknown; binary?: boolean; keepalive?: boolean } = {},
+  options: { method?: string; token?: string; body?: unknown; binary?: boolean; keepalive?: boolean; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { 'X-Vault-Client': 'local-web' };
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 30_000);
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000);
   try {
     const response = await fetch(`/api${path}`, {
       method: options.method ?? 'GET',
@@ -32,7 +34,7 @@ async function request<T>(
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       cache: 'no-store',
       credentials: 'omit',
-      signal: controller.signal,
+      signal: options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
       keepalive: options.keepalive ?? false,
     });
     if (!response.ok) {
@@ -76,6 +78,12 @@ export const api = {
   ),
   settings: (token: string, autoLockMinutes: AutoLockMinutes, revision: number) => request<VaultResponse>(
     '/settings', { method: 'PUT', token, body: { autoLockMinutes, revision } },
+  ),
+  changeMasterPassword: (token: string, currentPassword: string, newPassword: string, confirmPassword: string, revision: number) => request<ChangeMasterPasswordResponse>(
+    '/master-password', { method: 'POST', token, body: { currentPassword, newPassword, confirmPassword, revision } },
+  ),
+  selectStorageFolder: (token: string, signal: AbortSignal) => request<FolderSelectionResponse>(
+    '/storage-location/select-folder', { method: 'POST', token, body: {}, signal, timeoutMs: 130_000 },
   ),
   storageLocation: (token: string, directory: string, storagePath: string, revision: number) => request<StorageLocationResponse>(
     '/storage-location', { method: 'POST', token, body: { directory, storagePath, revision, confirmed: true } },

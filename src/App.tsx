@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { AutoLockMinutes, EntryInput, EntryType, SessionResponse, VaultEntry, VaultResponse, VaultStatus } from '../shared/types';
+import type { AutoLockMinutes, EntryInput, EntryType, ProfileSummary, SessionResponse, VaultEntry, VaultResponse, VaultStatus } from '../shared/types';
 import { api, ApiError } from './api';
 import { ChangeMasterPasswordDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, typeNames } from './components';
 import type { IconName } from './components';
@@ -14,29 +14,36 @@ function Brand() {
   return <div className="brand"><span className="brand-mark"><Icon name="lock" size={23} /></span><div><strong>私密保管库<span className="brand-dot">.</span></strong><span className="brand-caption">LOCAL PASSWORD VAULT</span></div></div>;
 }
 
-function AuthForm({ exists, busy, onSubmit }: { exists: boolean; busy: boolean; onSubmit: (password: string) => void }) {
+type AuthMode = { kind: 'unlock' } | { kind: 'create-default' } | { kind: 'create-profile' };
+
+function AuthForm({ mode, busy, onSubmit }: { mode: AuthMode; busy: boolean; onSubmit: (name: string, password: string, confirmation: string) => void }) {
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [accepted, setAccepted] = useState(false);
   const [error, setError] = useState('');
+  const unlocking = mode.kind === 'unlock';
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
+    const submittedName = name.trim();
     const submitted = password;
     setPassword('');
     setConfirmation('');
     setError('');
-    if (!exists && submitted.length < 12) { setError('主密码至少需要 12 个字符，请重新输入。'); return; }
-    if (!exists && submitted !== confirmation) { setError('两次输入的主密码不一致，请重新输入。'); return; }
-    if (!exists && !accepted) { setError('请先确认已了解主密码无法找回。'); return; }
-    onSubmit(submitted);
+    if (mode.kind === 'create-profile' && (!submittedName || [...submittedName].length > 32)) { setError('身份档名称需要 1–32 个字符，请重新填写。'); return; }
+    if (!unlocking && submitted.length < 12) { setError('主密码至少需要 12 个字符，请重新输入。'); return; }
+    if (!unlocking && submitted !== confirmation) { setError('两次输入的主密码不一致，请重新输入。'); return; }
+    if (!unlocking && !accepted) { setError('请先确认已了解主密码无法找回。'); return; }
+    onSubmit(submittedName, submitted, confirmation);
   };
   return <form onSubmit={submit} className="auth-form" autoComplete="off" aria-busy={busy}>
-    <div className="form-field"><label htmlFor="master-password">{exists ? '主密码' : '设置主密码'}</label><div className="input-with-icon"><Icon name="lock" size={18} /><input id="master-password" type="password" autoComplete={exists ? 'off' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={exists ? '输入主密码，打开你的保管库' : '至少 12 个字符，建议使用长口令'} minLength={exists ? undefined : 12} required disabled={busy} autoFocus /></div></div>
-    {!exists && <><div className="form-field"><label htmlFor="master-confirm">确认主密码</label><input id="master-confirm" type="password" autoComplete="new-password" value={confirmation} onChange={event => setConfirmation(event.target.value)} placeholder="再次输入主密码" required minLength={12} disabled={busy} /></div><label className="checkbox-label"><input type="checkbox" checked={accepted} onChange={event => setAccepted(event.target.checked)} disabled={busy} /><span>我已牢记主密码，并了解<strong>忘记后无法找回</strong>，也无法解密备份。</span></label></>}
+    {mode.kind === 'create-profile' && <div className="form-field"><label htmlFor="profile-name">身份档名称</label><input id="profile-name" type="text" value={name} onChange={event => setName(event.target.value)} placeholder="例如：工作、个人、测试" minLength={1} maxLength={32} required disabled={busy} autoFocus /></div>}
+    <div className="form-field"><label htmlFor="master-password">{unlocking ? '主密码' : '设置主密码'}</label><div className="input-with-icon"><Icon name="lock" size={18} /><input id="master-password" type="password" autoComplete={unlocking ? 'off' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={unlocking ? '输入主密码，打开你的保管库' : '至少 12 个字符，建议使用长口令'} minLength={unlocking ? undefined : 12} required disabled={busy} autoFocus={mode.kind !== 'create-profile'} /></div></div>
+    {!unlocking && <><div className="form-field"><label htmlFor="master-confirm">确认主密码</label><input id="master-confirm" type="password" autoComplete="new-password" value={confirmation} onChange={event => setConfirmation(event.target.value)} placeholder="再次输入主密码" required minLength={12} disabled={busy} /></div><label className="checkbox-label"><input type="checkbox" checked={accepted} onChange={event => setAccepted(event.target.checked)} disabled={busy} /><span>我已牢记主密码，并了解<strong>忘记后无法找回</strong>，也无法解密备份。</span></label></>}
     {error && <ErrorMessage>{error}</ErrorMessage>}
-    <button className="button primary auth-submit" type="submit" disabled={busy}>{busy ? '正在处理，请稍候…' : exists ? '解锁保管库' : '创建我的保管库'}{!busy && <Icon name="arrow" size={18} />}</button>
-    <p className="auth-form-hint">{exists ? '刷新或关闭页面后，需要重新输入主密码。' : '密码只在本次会话中使用，不写入浏览器存储。'}</p>
+    <button className="button primary auth-submit" type="submit" disabled={busy}>{busy ? '正在处理，请稍候…' : unlocking ? '解锁保管库' : mode.kind === 'create-profile' ? '创建并进入' : '创建我的保管库'}{!busy && <Icon name="arrow" size={18} />}</button>
+    <p className="auth-form-hint">{unlocking ? '刷新或关闭页面后，需要重新输入主密码。' : '密码只在本次会话中使用，不写入浏览器存储。'}</p>
   </form>;
 }
 
@@ -53,6 +60,9 @@ export default function App() {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [storageOpen, setStorageOpen] = useState(false);
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [creatingProfile, setCreatingProfile] = useState(false);
   const [masterPasswordOpen, setMasterPasswordOpen] = useState(false);
   const [masterPasswordReloadRequired, setMasterPasswordReloadRequired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -73,6 +83,14 @@ export default function App() {
   const sessionChangeVersion = useRef(0);
   const lastActivity = useRef(0);
 
+  // An unknown id falls back to the default profile, then to whichever profile exists first.
+  const selectedProfile = profiles.find(profile => profile.id === selectedProfileId)
+    ?? profiles.find(profile => profile.isDefault)
+    ?? profiles[0]
+    ?? null;
+  const hasAnyProfile = profiles.length > 0 || status?.exists === true;
+  const authMode: AuthMode = creatingProfile ? { kind: 'create-profile' } : hasAnyProfile ? { kind: 'unlock' } : { kind: 'create-default' };
+
   // Every logout and new session invalidates ALL earlier asynchronous work.
   const isCurrent = useCallback((version: number) => alive.current && version === epoch.current, []);
   const clearSensitive = useCallback((message: string) => {
@@ -88,6 +106,8 @@ export default function App() {
     setStorageOpen(false);
     setMasterPasswordOpen(false);
     setMasterPasswordReloadRequired(false);
+    setSelectedProfileId(null);
+    setCreatingProfile(false);
     setSearch('');
     setSelectedId(null);
     setMobileDetail(false);
@@ -200,6 +220,9 @@ export default function App() {
     let disposed = false;
     const version = epoch.current;
     setStatusLoading(true);
+    void api.profiles().then(result => {
+      if (!disposed && isCurrent(version)) setProfiles(result.profiles);
+    }).catch(() => undefined);
     void api.status().then(result => {
       if (!disposed && isCurrent(version)) { setStatus(result); setError(''); }
     }).catch(cause => {
@@ -273,16 +296,23 @@ export default function App() {
     };
   }, [token, clearSensitive, handleFailure, isActive, isCurrent, lock]);
 
-  const authenticate = async (password: string) => {
+  const authenticate = async (name: string, password: string) => {
     if (busyRef.current || lockPending || !status) return;
     const version = epoch.current;
+    const creating = creatingProfile;
+    const profile = creating ? null : selectedProfile?.id ?? null;
+    const unlocks = !creating && (status.exists || profiles.length > 0);
     busyRef.current = true;
     setAuthBusy(true);
     setError('');
     setNotice('');
     try {
-      const result = await (status.exists ? api.unlock(password) : api.create(password));
+      const result = creating ? await api.createProfile(name, password)
+        : unlocks ? await api.unlock(password, profile)
+        : await api.create(password);
       installSession(result, version);
+      if (creating) setSelectedProfileId(name);
+      setStatusAttempt(previous => previous + 1);
     } catch (cause) {
       if (isCurrent(version)) {
         setError(errorText(cause));
@@ -481,10 +511,16 @@ export default function App() {
           <div className="vault-illustration" aria-hidden="true"><div className="illustration-ring ring-one" /><div className="illustration-ring ring-two" /><div className="illustration-dot dot-one" /><div className="illustration-dot dot-two" /><div className="vault-tile tile-back" /><div className="vault-tile tile-front"><Icon name="shield" size={64} /><span>PRIVATE BY DESIGN</span></div><span className="illustration-caption"><span />本地保存 · 加密备份 · 自动锁定</span></div>
           <div className="intro-facts"><span><Icon name="shield" size={17} />无云端账户</span><span><Icon name="lock" size={17} />主密码保护</span><span><Icon name="file" size={17} />本地文件存储</span></div>
         </section>
-        <section className="auth-card" aria-labelledby="auth-title"><div className="auth-card-heading"><span className="round-icon"><Icon name="lock" size={25} /></span><p className="eyebrow">{status?.exists ? 'WELCOME BACK' : 'YOUR PRIVATE SPACE'}</p><h2 id="auth-title">{statusLoading && !status ? '连接本地保管库' : status?.exists ? '欢迎回来' : status ? '从一把主钥匙开始' : '暂时无法连接'}</h2><p>{status?.exists ? '解锁之前，所有条目都保持私密。' : '创建专属于你的本地密码库。'}</p></div>
+        <section className="auth-card" aria-labelledby="auth-title"><div className="auth-card-heading"><span className="round-icon"><Icon name="lock" size={25} /></span><p className="eyebrow">{hasAnyProfile ? 'WELCOME BACK' : 'YOUR PRIVATE SPACE'}</p><h2 id="auth-title">{statusLoading && !status ? '连接本地保管库' : hasAnyProfile ? '欢迎回来' : status ? '从一把主钥匙开始' : '暂时无法连接'}</h2><p>{hasAnyProfile ? '解锁之前，所有条目都保持私密。' : '创建专属于你的本地密码库。'}</p></div>
           {notice && <div className="message subtle" role="status"><Icon name="info" /><span>{notice}</span></div>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
-          {statusLoading ? <p className="loading-state" role="status">正在读取本地密码库状态…</p> : status ? <AuthForm key={`${status.exists}-${currentEpoch}`} exists={status.exists} busy={authBusy || lockPending || restoreOpen} onSubmit={password => void authenticate(password)} /> : null}
+          {statusLoading && profiles.length === 0 ? <p className="loading-state" role="status">正在读取本地密码库状态…</p> : status ? <>
+            {profiles.length > 0 && <div className="profile-picker" role="group" aria-label="选择身份档">
+              {profiles.map(profile => <button key={profile.id ?? 'default'} type="button" className={`profile-chip${!creatingProfile && selectedProfile?.id === profile.id ? ' selected' : ''}`} aria-pressed={!creatingProfile && selectedProfile?.id === profile.id} onClick={() => { if (authBusy || lockPending) return; setCreatingProfile(false); setSelectedProfileId(profile.id); }} disabled={authBusy || lockPending}>{profile.name}</button>)}
+              <button type="button" className={`profile-chip profile-add${creatingProfile ? ' selected' : ''}`} aria-pressed={creatingProfile} onClick={() => { if (authBusy || lockPending) return; setSelectedProfileId(null); setCreatingProfile(true); setError(''); }} disabled={authBusy || lockPending}><Icon name="plus" size={13} />新建身份档</button>
+            </div>}
+            <AuthForm key={`${authMode.kind}-${selectedProfile?.id ?? 'default'}-${currentEpoch}`} mode={authMode} busy={authBusy || lockPending || restoreOpen} onSubmit={(name, password) => void authenticate(name, password)} />
+          </> : null}
           {!statusLoading && (!status || error) && <button className="button secondary full-width" onClick={() => setStatusAttempt(previous => previous + 1)} disabled={authBusy || lockPending}>重新检查本地服务</button>}
           <div className="auth-divider"><span />或从已有备份开始<span /></div><button className="button restore-entry" onClick={() => setRestoreOpen(true)} disabled={authBusy || lockPending || statusLoading}><Icon name="upload" size={17} />从加密备份恢复<Icon name="chevron" size={14} /></button>
           {status && <div className="storage-location"><Icon name="file" size={16} /><div><span>密码库文件位置</span><code>{status.storagePath || '正在获取文件位置'}</code></div></div>}
@@ -493,7 +529,7 @@ export default function App() {
     </div> : <div className="app-shell">
       <header className="app-header"><Brand /><div className="global-search"><Icon name="search" size={19} /><label className="sr-only" htmlFor="vault-search">搜索名称、用户名或地址</label><input id="vault-search" value={search} onChange={event => { setSearch(event.target.value); setView('vault'); setMobileDetail(false); }} placeholder="搜索名称、用户名或地址…" autoComplete="off" spellCheck={false} />{search ? <button className="icon-button" aria-label="清空搜索" onClick={() => { setSearch(''); document.getElementById('vault-search')?.focus(); }}><Icon name="close" size={16} /></button> : <span className="search-key"><Icon name="search" size={12} /></span>}</div><div className="header-actions"><button className="button primary" onClick={() => openEditor()} disabled={!!busy}><Icon name="plus" size={18} /><span>新增条目</span></button><button className="button secondary lock-button" onClick={() => lock()}><Icon name="lock" size={17} /><span>锁定</span></button></div></header>
       <div className="workspace">
-        <aside className="sidebar"><div className="sidebar-top"><p className="eyebrow">我的保管库</p><nav aria-label="条目分类">{navigation.map(item => <button key={item.key} className={`nav-item${view === 'vault' && category === item.key ? ' active' : ''}`} aria-current={view === 'vault' && category === item.key ? 'page' : undefined} onClick={() => chooseCategory(item.key)}><Icon name={item.icon} size={19} /><span>{item.label}</span><span className="nav-count">{item.key === 'all' ? entries.length : entries.filter(entry => entry.type === item.key).length}</span></button>)}</nav><div className="nav-divider" /><button className={`nav-item${view === 'settings' ? ' active' : ''}`} onClick={() => { setView('settings'); setMobileDetail(false); }} aria-current={view === 'settings' ? 'page' : undefined}><Icon name="settings" size={19} /><span>设置与备份</span></button></div>
+        <aside className="sidebar"><div className="sidebar-top"><p className="eyebrow">我的保管库 · {selectedProfile?.name ?? '默认'}</p><nav aria-label="条目分类">{navigation.map(item => <button key={item.key} className={`nav-item${view === 'vault' && category === item.key ? ' active' : ''}`} aria-current={view === 'vault' && category === item.key ? 'page' : undefined} onClick={() => chooseCategory(item.key)}><Icon name={item.icon} size={19} /><span>{item.label}</span><span className="nav-count">{item.key === 'all' ? entries.length : entries.filter(entry => entry.type === item.key).length}</span></button>)}</nav><div className="nav-divider" /><button className={`nav-item${view === 'settings' ? ' active' : ''}`} onClick={() => { setView('settings'); setMobileDetail(false); }} aria-current={view === 'settings' ? 'page' : undefined}><Icon name="settings" size={19} /><span>设置与备份</span></button></div>
           <div className="sidebar-bottom"><div className="privacy-card"><Icon name="shield" size={22} /><strong>秘密不必远行</strong><p>凭据保存在本机文件中。<br />记得定期导出加密备份。</p><button onClick={() => { setView('settings'); setMobileDetail(false); }}>管理我的备份<Icon name="arrow" size={14} /></button></div><div className={`session-indicator${seconds <= 30 ? ' expiring' : ''}`}><span className="status-dot" /><span>本地会话已解锁</span><span className="countdown" title="距离自动锁定">{remaining}</span></div><p className="sidebar-footnote">{session.vault.settings.autoLockMinutes} 分钟无操作后自动锁定</p></div>
         </aside>
         <main className={`main-workspace${view === 'settings' ? ' settings-view' : ''}${mobileDetail && selected ? ' showing-detail' : ''}`}>

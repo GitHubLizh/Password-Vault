@@ -25,6 +25,15 @@ async function attempt(fixture: Fixture, body: unknown): Promise<LightMyRequestR
   return fixture.api('POST', '/api/profiles', { body });
 }
 
+async function unlockAttempt(fixture: Fixture, body: Record<string, unknown>): Promise<LightMyRequestResponse> {
+  fixture.advance(1000);
+  return fixture.api('POST', '/api/unlock', { body });
+}
+
+async function unlock(fixture: Fixture, profile: string | null, password: string): Promise<SessionResponse> {
+  return success<SessionResponse>(await unlockAttempt(fixture, { profile, password }));
+}
+
 async function addEntry(fixture: Fixture, session: SessionResponse, name: string): Promise<SessionResponse> {
   const saved = success<VaultResponse>(await fixture.api('POST', '/api/entries', {
     token: session.token,
@@ -164,6 +173,34 @@ test('invalid profile names are rejected without creating anything on disk', asy
       failure(await attempt(fixture, { name, password: OTHER }), 400, 'INVALID_PROFILE_NAME');
     }
     assert.deepEqual(await readdir(fixture.directory), before, 'rejected names must create nothing');
+  });
+});
+
+test('unlocking selects the requested profile and rejects unknown or unsafe ones', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const work = await enter(fixture, '工作');
+    await addEntry(fixture, work, '工作档的条目');
+    await fixture.api('POST', '/api/lock', { token: work.token });
+
+    const reopened = await unlock(fixture, '工作', OTHER);
+    assert.deepEqual(reopened.vault.entries.map(entry => entry.name), ['工作档的条目']);
+    assert.equal(success<VaultStatus>(await fixture.api('GET', '/api/status', { token: reopened.token })).storagePath,
+      await profileVault(fixture, '工作'), 'an active session must report its own profile path');
+
+    failure(await unlockAttempt(fixture, { profile: '没有这个档', password: OTHER }), 404, 'PROFILE_NOT_FOUND');
+    failure(await unlockAttempt(fixture, { profile: '../../../etc', password: OTHER }), 400, 'INVALID_PROFILE_NAME');
+    await mkdir(join(fixture.directory, '空目录'), { recursive: true });
+    failure(await unlockAttempt(fixture, { profile: '空目录', password: OTHER }), 404, 'PROFILE_NOT_FOUND');
+
+    // A profile password must not open the default vault, and vice versa.
+    failure(await unlockAttempt(fixture, { password: OTHER }), 400, 'DECRYPT_FAILED');
+    failure(await unlockAttempt(fixture, { profile: '工作', password: PASSWORD }), 400, 'DECRYPT_FAILED');
+
+    const backToDefault = await unlock(fixture, null, PASSWORD);
+    assert.deepEqual(backToDefault.vault.entries.map(entry => entry.name), ['默认档的条目']);
+    failure(await fixture.api('GET', '/api/vault', { token: reopened.token }), 401, 'LOCKED');
   });
 });
 

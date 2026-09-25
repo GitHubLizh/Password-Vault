@@ -295,20 +295,31 @@ export class VaultService {
     }
   }
 
-  async unlock(rawPassword: unknown): Promise<SessionResponse> {
-    const password = validate.password(rawPassword);
-    this.throttle();
-    const source = await this.readSource();
-    if (source === null) throw new VaultError(404, 'NOT_FOUND', '还没有密码库，请先创建。');
-    const envelope = parseEnvelope(source);
-    const salt = Buffer.from(envelope.salt, 'base64');
-    const key = await deriveKey(password, salt);
+  async unlock(rawBody: unknown): Promise<SessionResponse> {
+    const input = validate.record(rawBody);
+    const password = validate.password(input.password);
+    const profile = input.profile === undefined || input.profile === null ? null : profileName(input.profile);
+    if (profile !== null && !(await this.isProfileVault(join(this.rootDirectory, profile, 'vault.pvlt')))) {
+      throw new VaultError(404, 'PROFILE_NOT_FOUND', '没有找到这个身份档，请重新选择。');
+    }
+    this.activeProfileId = profile;
     try {
-      const vault = decrypt(envelope, key);
-      this.clearPending();
-      return this.beginSession(key, salt, vault, source);
+      this.throttle();
+      const source = await this.readSource();
+      if (source === null) throw new VaultError(404, 'NOT_FOUND', '还没有密码库，请先创建。');
+      const envelope = parseEnvelope(source);
+      const salt = Buffer.from(envelope.salt, 'base64');
+      const key = await deriveKey(password, salt);
+      try {
+        const vault = decrypt(envelope, key);
+        this.clearPending();
+        return this.beginSession(key, salt, vault, source);
+      } catch (error) {
+        key.fill(0);
+        throw error;
+      }
     } catch (error) {
-      key.fill(0);
+      this.activeProfileId = null;
       throw error;
     }
   }

@@ -115,6 +115,12 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
 .storage-location > svg { margin-top: 2px; }
 .storage-location span { display: block; font-size: 10px; margin-bottom: 6px; }
 .storage-location code { display: block; color: #949f88; font-size: 9px; line-height: 1.7; }
+.profile-picker { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 17px; }
+.profile-chip { display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px; border: 1px solid #e2e7dd; border-radius: 999px; background: #fff; color: #62705f; font-size: 11px; cursor: pointer; transition: border-color .16s, background .16s, color .16s; }
+.profile-chip:hover:not(:disabled) { border-color: #c9d5c5; background: #fbfcf9; }
+.profile-chip.selected { border-color: var(--green); background: #f1f6f1; color: var(--green-dark); font-weight: 600; }
+.profile-chip:disabled { opacity: .55; cursor: default; }
+.profile-add { border-style: dashed; color: #8b9686; }
 .auth-footer { width: min(1280px, 100%); padding: 22px 50px 25px; margin: 0 auto; display: flex; justify-content: space-between; color: #a4ab9b; font-size: 10px; letter-spacing: .05em; }
 .auth-footer > span:last-child { font-size: 8px; letter-spacing: .15em; }
 .loading-state { font-size: 13px; color: #86947c; padding: 15px 0; }

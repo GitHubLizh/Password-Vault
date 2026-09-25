@@ -3,6 +3,7 @@ import type {
   ChangeMasterPasswordResponse,
   EntryInput,
   FolderSelectionResponse,
+  ProfilesResponse,
   RestorePreview,
   SessionResponse,
   StorageLocationResponse,
@@ -64,7 +65,11 @@ export const api = {
   status: (token?: string) => request<VaultStatus>('/status', { token }),
   vault: (token: string) => request<VaultResponse>('/vault', { token }),
   create: (password: string) => request<SessionResponse>('/create', { method: 'POST', body: { password } }),
-  unlock: (password: string) => request<SessionResponse>('/unlock', { method: 'POST', body: { password } }),
+  unlock: (password: string, profile?: string | null) => request<SessionResponse>('/unlock', {
+    method: 'POST', body: { password, ...(profile === undefined || profile === null ? {} : { profile }) },
+  }),
+  profiles: () => request<ProfilesResponse>('/profiles'),
+  createProfile: (name: string, password: string) => request<SessionResponse>('/profiles', { method: 'POST', body: { name, password } }),
   lock: (token: string, keepalive = false) => request<{ ok: true }>('/lock', {
     method: 'POST', token, body: {}, keepalive,
   }),

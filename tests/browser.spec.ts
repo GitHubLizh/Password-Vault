@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const MASTER = 'Vault-UI-Test-2026-only';
+// Ticket "changes the master password" rotates the default profile's password; later tests must use it.
+const ROTATED = 'Vault-UI-Rotated-2026-confirmed';
 const ACCOUNT_SECRET = '  UI-secret-中文-2026  ';
 let server: ChildProcess;
 let directory: string;
@@ -59,6 +61,13 @@ test.afterAll(async () => {
 async function unlock(page: Page) {
   await page.goto(origin);
   await page.getByLabel('主密码', { exact: true }).fill(MASTER);
+  await submitPassword(page, '解锁保管库');
+  await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeVisible();
+}
+
+// Selecting a profile is client-side state, so this must not reload the page.
+async function unlockInPlace(page: Page, password: string) {
+  await page.getByLabel('主密码', { exact: true }).fill(password);
   await submitPassword(page, '解锁保管库');
   await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeVisible();
 }
@@ -475,7 +484,7 @@ test('entry forms stay centered with keyboard focus, fixed actions and unsaved-c
 });
 
 test('changes the master password from settings and reopens the vault with the new one', async ({ page }) => {
-  const rotated = 'Vault-UI-Rotated-2026-confirmed';
+  const rotated = ROTATED;
   await page.setViewportSize({ width: 1440, height: 1000 });
   await unlock(page);
   await page.getByRole('button', { name: '全部条目', exact: false }).click();
@@ -531,4 +540,43 @@ test('changes the master password from settings and reopens the vault with the n
   await submitPassword(page, '解锁保管库');
   await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeVisible();
   await expect(page.locator('.entry-row strong').allTextContents()).resolves.toEqual(namesBefore);
+});
+
+const PROFILE_PASSWORD = 'Vault-UI-工作档-口令-2026';
+
+test('creates an identity profile from the login page and keeps profiles apart', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(origin);
+  await expect(page.getByRole('button', { name: '默认', exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('profile-picker.png'), fullPage: true });
+
+  await page.getByRole('button', { name: '新建身份档', exact: true }).click();
+  await page.getByLabel('身份档名称', { exact: true }).fill('工作');
+  await page.getByLabel('设置主密码', { exact: true }).fill(PROFILE_PASSWORD);
+  await page.getByLabel('确认主密码', { exact: true }).fill(PROFILE_PASSWORD);
+  await page.getByRole('checkbox').check();
+  await submitPassword(page, '创建并进入');
+  await expect(page.getByRole('heading', { name: '从第一条密码开始' })).toBeVisible();
+  await expect(page.locator('.sidebar-top .eyebrow')).toContainText('工作');
+
+  await openEditor(page, '网站与应用');
+  await page.getByLabel('名称 *', { exact: true }).fill('只有工作档看得见');
+  await page.getByLabel('用户名 / 账号', { exact: true }).fill('profile-only');
+  await save(page, '只有工作档看得见');
+
+  await page.getByRole('button', { name: '锁定', exact: true }).click();
+  await expect(page.getByRole('button', { name: '默认', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '工作', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '默认', exact: true }).click();
+  await unlockInPlace(page, ROTATED);
+  await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill('只有工作档看得见');
+  await expect(page.locator('.entry-row')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '没有找到相关条目' })).toBeVisible();
+
+  await page.getByRole('button', { name: '锁定', exact: true }).click();
+  await page.getByRole('button', { name: '工作', exact: true }).click();
+  await unlockInPlace(page, PROFILE_PASSWORD);
+  await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill('只有工作档看得见');
+  await expect(page.locator('.entry-row')).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('profile-work.png'), fullPage: true });
 });

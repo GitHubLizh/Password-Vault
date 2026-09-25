@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-server/
+.test-data/
+*.pvlt
+*.tmp
+storage-location.json
+*.write-lock
+.env
+.env.*
+!.env.example

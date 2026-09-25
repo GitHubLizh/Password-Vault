@@ -74,3 +74,9 @@ export function success<T>(response: LightMyRequestResponse): T {
   assert.match(String(response.headers['cache-control']), /\bno-store\b/);
   return response.json<T>();
 }
+
+export function failure(response: LightMyRequestResponse, status: number, code: string): void {
+  assert.equal(response.statusCode, status, `request should fail with ${status} ${code}: ${response.body}`);
+  assert.match(String(response.headers['cache-control']), /\bno-store\b/);
+  assert.equal(response.json<{ code: string }>().code, code);
+}

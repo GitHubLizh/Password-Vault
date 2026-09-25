@@ -6,12 +6,14 @@ import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './c
 import { VaultError } from './errors.js';
 import { StorageLocation, storageDirectory } from './storage-location.js';
 import { pickFolder, type FolderPicker } from './folder-picker.js';
+import { MAX_PROFILES, profileName, profileNameKey } from './profile-name.js';
 import * as validate from './validation.js';
 
 const DEFAULT_PROFILE_NAME = '默认';
 
 interface Session {
   token: string;
+  profileId: string | null;
   key: Buffer;
   salt: Buffer;
   vault: VaultSnapshot;
@@ -45,11 +47,14 @@ function missing(error: unknown): boolean {
 export class VaultService {
   // Storage root, as opposed to the current profile's directory (equal until profiles exist).
   get rootDirectory(): string { return this.location.directory; }
-  get profileDirectory(): string { return this.rootDirectory; }
+  get profileDirectory(): string {
+    return this.activeProfileId === null ? this.rootDirectory : join(this.rootDirectory, this.activeProfileId);
+  }
   // Storage location and folder picking are root-level concerns: the whole profile tree moves together.
   get rootStoragePath(): string { return join(this.rootDirectory, 'vault.pvlt'); }
   get storagePath(): string { return join(this.profileDirectory, 'vault.pvlt'); }
   private session?: Session;
+  private activeProfileId: string | null = null;
   private pending?: PendingRestore;
   private tail: Promise<unknown> = Promise.resolve();
   private queued = 0;
@@ -100,6 +105,7 @@ export class VaultService {
   private clearSession(): void {
     this.session?.key.fill(0);
     this.session = undefined;
+    this.activeProfileId = null;
     this.activePicker?.abort();
   }
 
@@ -189,10 +195,11 @@ export class VaultService {
     }
   }
 
-  private beginSession(key: Buffer, salt: Buffer, vault: VaultSnapshot, source: string): SessionResponse {
+  private beginSession(key: Buffer, salt: Buffer, vault: VaultSnapshot, source: string, profileId = this.activeProfileId): SessionResponse {
     this.clearSession();
+    this.activeProfileId = profileId;
     this.session = {
-      token: randomBytes(32).toString('base64url'), key, salt, vault,
+      token: randomBytes(32).toString('base64url'), profileId, key, salt, vault,
       fingerprint: fingerprint(source), expiresAt: this.now() + vault.settings.autoLockMinutes * 60000,
     };
     return { token: this.session.token, ...this.response(this.session) };
@@ -264,6 +271,26 @@ export class VaultService {
       return this.beginSession(key, salt, vault, source);
     } catch (error) {
       key.fill(0);
+      throw error;
+    }
+  }
+
+  // A new profile is created and entered in one step; switching into an existing profile lands in 004.
+  async createProfile(body: unknown): Promise<SessionResponse> {
+    const input = validate.record(body);
+    const name = profileName(input.name);
+    const { profiles } = await this.profiles();
+    if (profiles.some(profile => profile.id !== null && profileNameKey(profile.id) === profileNameKey(name))) {
+      throw new VaultError(409, 'PROFILE_EXISTS', '已有同名身份档，请换一个名字。');
+    }
+    if (profiles.length >= MAX_PROFILES) {
+      throw new VaultError(400, 'PROFILE_LIMIT', `身份档数量已达上限（${MAX_PROFILES} 个）。`);
+    }
+    this.activeProfileId = name;
+    try {
+      return await this.create(input.password);
+    } catch (error) {
+      this.activeProfileId = null;
       throw error;
     }
   }

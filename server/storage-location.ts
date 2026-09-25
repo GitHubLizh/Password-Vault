@@ -16,8 +16,7 @@ export function storageDirectory(value: unknown): string {
       throw new VaultError(400, 'INVALID_DIRECTORY', '请输入以盘符开头的目录，例如 D:\\PasswordVaultData。');
     }
     for (const part of directory.slice(3).split(/[\\/]/)) {
-      if (part === '.' || part === '..') continue;
-      if (/[. ]$/.test(part) || /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(part)) {
+      if (windowsSegmentProblem(part)) {
         throw new VaultError(400, 'INVALID_DIRECTORY', '目录包含 Windows 不支持的名称或结尾空格、句点。');
       }
     }
@@ -27,6 +26,14 @@ export function storageDirectory(value: unknown): string {
 
 function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+// Shared by directory paths and single profile-name segments.
+export function windowsSegmentProblem(part: string): string | undefined {
+  if (part === '.' || part === '..') return undefined;
+  if (/[. ]$/.test(part)) return '名称不能以空格或句点结尾。';
+  if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/i.test(part)) return '名称是 Windows 保留名。';
+  return undefined;
 }
 
 export class StorageLocation {

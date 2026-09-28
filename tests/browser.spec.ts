@@ -447,9 +447,9 @@ test('entry forms stay centered with keyboard focus, fixed actions and unsaved-c
   const name = page.getByLabel('名称 *', { exact: true });
   await name.focus();
   await page.keyboard.press('Tab');
-  await expect(page.getByLabel('用户名 / 账号', { exact: true })).toBeFocused();
-  await page.keyboard.press('Tab');
   await expect(page.getByLabel('网站 / 应用地址', { exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByLabel('用户名 / 账号', { exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(page.getByLabel('密码', { exact: true })).toBeFocused();
   await name.focus();

@@ -122,8 +122,8 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
         <fieldset className="type-picker" disabled={busy}><legend>条目类型</legend><div className="type-options">{(Object.keys(typeNames) as EntryType[]).map(type => <label className={draft.type === type ? 'type-option selected' : 'type-option'} key={type}><input type="radio" name={`${id}-type`} checked={draft.type === type} onChange={() => changeType(type)} /><Icon name={type} /><span>{typeNames[type]}</span></label>)}</div></fieldset>
         <p className="field-hint">切换类型将清空不适用字段。</p>
         {field('name', '名称', 120, { required: true, placeholder: '为这条凭据取一个容易找到的名字' })}
-        {field('username', draft.type === 'api' ? '标识 / Access Key ID（可选）' : '用户名 / 账号', 512, { placeholder: draft.type === 'api' ? '用于区分这组 API 凭据的标识' : '登录用户名或邮箱' })}
         {field('address', draft.type === 'server' ? '主机地址' : draft.type === 'api' ? '服务地址' : '网站 / 应用地址', 2048, { placeholder: draft.type === 'server' ? '主机名或 IP 地址' : '仅保存为文本，不会自动访问' })}
+        {field('username', draft.type === 'api' ? '标识 / Access Key ID（可选）' : '用户名 / 账号', 512, { placeholder: draft.type === 'api' ? '用于区分这组 API 凭据的标识' : '登录用户名或邮箱' })}
         {draft.type === 'server' && field('port', '端口（可选）', 5, { placeholder: '1–65535' })}
         {draft.type !== 'api' && field('password', '密码', 16384, { secret: true, placeholder: '输入需要保管的密码' })}
         {draft.type === 'api' && <>{field('apiKey', 'API Key', 16384, { secret: true })}{field('secret', 'Secret', 16384, { secret: true })}</>}

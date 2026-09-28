@@ -102,8 +102,8 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
     setDraft(previous => ({ ...previous, type, port: type === 'server' ? previous.port : '', username: type === 'api' ? '' : previous.username, password: type === 'api' ? '' : previous.password, apiKey: type === 'api' ? previous.apiKey : '', secret: type === 'api' ? previous.secret : '' }));
     setValidation('');
   };
-  const field = (key: Exclude<keyof EntryInput, 'type' | 'notes'>, label: string, maxLength: number, options: { secret?: boolean; placeholder?: string; required?: boolean } = {}) => <div className="form-field" key={key}>
-    <label htmlFor={`${id}-${key}`}>{label}{options.required && <span className="required"> *</span>}</label>
+  const field = (key: Exclude<keyof EntryInput, 'type' | 'notes'>, label: string, maxLength: number, options: { secret?: boolean; placeholder?: string; required?: boolean } = {}) => <div className={`form-field${options.secret ? ' secret' : ''}`} key={key}>
+    <div className="field-label-row"><label htmlFor={`${id}-${key}`}>{label}{options.required && <span className="required"> *</span>}</label>{options.secret && <span className="secret-tag" aria-hidden="true"><Icon name="lock" size={11} />秘密</span>}</div>
     <input id={`${id}-${key}`} value={draft[key]} onChange={event => setDraft(previous => ({ ...previous, [key]: event.target.value }))} type={options.secret ? 'password' : 'text'} autoComplete={options.secret ? 'new-password' : 'off'} spellCheck={false} maxLength={maxLength} required={options.required} placeholder={options.placeholder} inputMode={key === 'port' ? 'numeric' : undefined} disabled={busy} />
   </div>;
   const submit = (event: FormEvent) => {
@@ -416,8 +416,8 @@ function DetailField({ label, value, secret = false, multiline = false }: { labe
     }
   };
   if (!value) return null;
-  return <div className={`detail-field${multiline ? ' multiline' : ''}`}>
-    <div className="detail-field-main"><span className="field-label">{label}</span><span className={`field-value${secret && !revealed ? ' masked' : ''}${multiline ? ' preserve-lines' : ''}`}>{secret && !revealed ? '••••••••••••' : value}</span></div>
+  return <div className={`detail-field${secret && !multiline ? ' secret' : ''}${multiline ? ' multiline' : ''}`}>
+    <div className="detail-field-main"><div className="field-label-row"><span className="field-label">{label}</span>{secret && !multiline && <span className="secret-tag" aria-hidden="true"><Icon name="lock" size={11} />秘密</span>}</div><span className={`field-value${secret && !revealed ? ' masked' : ''}${multiline ? ' preserve-lines' : ''}`}>{secret && !revealed ? '••••••••••••' : value}</span></div>
     <div className="field-actions">{secret && <button className="icon-button" onClick={() => setRevealed(previous => !previous)} aria-label={`${revealed ? '隐藏' : '显示'}${label}`} title={`${revealed ? '隐藏' : '显示'}${label}（30 秒后自动隐藏）`} aria-pressed={revealed}><Icon name={revealed ? 'hidden' : 'eye'} size={18} /></button>}<button className="icon-button" onClick={() => void copy()} aria-label={`复制${label}`} title={`复制${label}`}><Icon name={feedback === '已复制' ? 'check' : 'copy'} size={18} /></button></div>
     {feedback && <span className="copy-feedback" role={feedback === '已复制' ? 'status' : 'alert'}>{feedback}</span>}
   </div>;

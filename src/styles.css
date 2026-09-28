@@ -16,7 +16,7 @@
   --text: #eaf1f8;
   --text-2: #c2cfdd;
   --text-3: #8fa0b4;
-  --text-4: #7a8ba3;
+  --text-4: #8695ab;
   --accent: #22d3ee;
   --accent-strong: #67e8f9;
   --accent-text: #7dd3e8;
@@ -219,6 +219,14 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
 .detail-field:last-child { border-bottom: 0; }
 .detail-field-main { flex: 1; min-width: 0; }
 .field-label { display: block; color: var(--text-4); font-size: 10px; margin-bottom: 8px; }
+.secret-tag { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-1); color: var(--accent-text); font-size: 9px; font-weight: 500; letter-spacing: .04em; }
+.secret-tag > svg { width: 11px; height: 11px; }
+.field-label-row { display: flex; align-items: center; gap: 8px; }
+.form-field .field-label-row { margin-bottom: 9px; }
+.form-field .field-label-row > label { margin-bottom: 0; }
+.detail-field-main .field-label-row { margin-bottom: 8px; }
+.detail-field-main .field-label-row > .field-label { margin-bottom: 0; }
+.detail-field.secret { box-shadow: inset 2px 0 0 var(--accent); }
 .field-value { display: block; color: var(--accent-text); font-size: 12px; overflow-wrap: anywhere; line-height: 1.7; white-space: pre-wrap; font-family: "SFMono-Regular", Consolas, "Microsoft YaHei", monospace; }
 .field-value.masked { letter-spacing: .2em; line-height: 1.4; color: var(--accent); }
 .field-actions { display: flex; align-items: center; flex-shrink: 0; gap: 2px; }
@@ -235,6 +243,11 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
 .empty-state h2 { font-size: 16px; color: var(--accent-text); font-weight: 550; }
 .empty-state p { color: var(--accent); font-size: 11px; line-height: 2; max-width: 225px; margin: 0 auto 25px; }
 .empty-state .button { font-size: 12px; }
+.empty-steps { list-style: none; margin: 28px auto 0; padding: 0; max-width: 262px; text-align: left; display: grid; gap: 15px; }
+.empty-steps li { display: flex; align-items: flex-start; gap: 11px; }
+.empty-steps li > span { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 21px; height: 21px; margin-top: 1px; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface-1); color: var(--accent); font-size: 10px; font-weight: 600; }
+.empty-steps strong { display: block; font-size: 11px; font-weight: 550; color: var(--text); line-height: 1.8; }
+.empty-steps small { display: block; font-size: 10px; color: var(--text-3); line-height: 1.8; }
 .detail-placeholder { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 45px 25px; }
 .placeholder-art { display: flex; align-items: center; justify-content: center; width: 106px; height: 117px; background: var(--surface-1); color: var(--accent); border: 1px solid var(--line); border-radius: 25px; transform: rotate(-7deg); box-shadow: 14px -8px 0 var(--surface-1); margin-bottom: 36px; }
 .detail-placeholder > .eyebrow { font-size: 7px; color: var(--text-4); margin-bottom: 12px; }

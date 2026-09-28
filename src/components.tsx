@@ -433,8 +433,8 @@ export function EntryDetail({ entry, busy, onEdit, onDelete, onBack, focusOnOpen
     <div className="detail-toolbar"><button className="button ghost mobile-back" onClick={onBack}><Icon name="back" size={17} />返回列表</button><span className="eyebrow desktop-only">ITEM DETAILS</span><button className="button secondary small" onClick={onEdit} disabled={busy}><Icon name="edit" size={16} />编辑条目</button></div>
     <div className="detail-identity"><span className={`entry-emblem large ${entry.type}`}><Icon name={entry.type} size={30} /></span><span className="type-badge">{typeNames[entry.type]}</span><h2>{entry.name}</h2><p>你的凭据，妥善保管在这里。</p></div>
     <div className="detail-fields">
-      <DetailField label={entry.type === 'api' ? '标识 / Access Key ID' : '用户名 / 账号'} value={entry.username} />
       <DetailField label={entry.type === 'server' ? '主机地址' : '网站 / 服务地址'} value={entry.address} />
+      <DetailField label={entry.type === 'api' ? '标识 / Access Key ID' : '用户名 / 账号'} value={entry.username} />
       {entry.type === 'server' && <DetailField label="端口" value={entry.port} />}
       {entry.type !== 'api' && <DetailField label="密码" value={entry.password} secret />}
       {entry.type === 'api' && <><DetailField label="API Key" value={entry.apiKey} secret /><DetailField label="Secret" value={entry.secret} secret /></>}

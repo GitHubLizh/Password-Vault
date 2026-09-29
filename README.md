@@ -17,6 +17,22 @@ npm start       # 启动本地服务（默认 http://127.0.0.1:47821）
 
 环境变量：`VAULT_PORT` 改端口（1024–65535），`VAULT_DATA_DIR` 指定数据目录（绝对路径）。服务只监听 `127.0.0.1`，不对外网开放。
 
+## 分发给非技术用户（免安装绿色包）
+
+`npm run package` 会先完整构建，再组装出 `release\PasswordVault\` 目录并压成 `release\PasswordVault-win-x64.zip`（实测 39 MB，解压后 111 MB）：
+
+```
+PasswordVault\
+  启动密码库.bat      双击启动：切到 app 目录、用内置 node.exe 拉起服务并打开浏览器
+  使用说明.txt        面向非技术用户的四段式说明（用法 / 数据位置 / 备份 / 常见问题）
+  runtime\node.exe    内置 Node 24 运行时，用户无需安装 Node
+  app\                dist、dist-server、生产依赖闭包（按 package-lock 计算，共 70 个包）与 type:module 清单
+```
+
+绿色包只是运行环境的搬运，不改变任何行为：数据仍写在 `%LOCALAPPDATA%\PasswordVault`（可用 `VAULT_DATA_DIR` 覆盖），换机或删包都不影响密码库文件。构建产物已存在时用 `node scripts/package.mjs --no-build` 跳过构建。压缩包用 PowerShell `Compress-Archive` 生成，它按 UTF-8 记录条目名，中文名启动脚本和解压后一致。
+
+尚未做的是代码签名：未签名的包从网上下载会触发 Windows SmartScreen「未知发布者」提示，`使用说明.txt` 里已给出「右键属性 → 解除锁定」的绕法。
+
 ## 功能
 
 - **三类凭据**：网站与应用、服务器（含端口）、API 凭据（API Key / Secret）。
@@ -44,6 +60,7 @@ npm run typecheck   # 前端 / 服务端 / 测试三套 tsconfig 全量类型检
 npm run build       # typecheck + Vite 构建 + 编译服务端
 npm test            # 单元与接口测试（tests/*.test.ts）
 npm run test:browser # 构建后跑 Playwright 端到端套件
+npm run package      # 构建并组装 release/ 免安装绿色包
 ```
 
 ## 目录结构
@@ -54,7 +71,7 @@ server/     Fastify 服务：加密、身份档、存储迁移、目录选择
 shared/     前后端共享的类型定义
 tests/      单元测试与 Playwright 端到端测试
 docs/       规格说明（specs/）与架构决策记录（adr/）
-scripts/    启动脚本 launch.mjs
+scripts/    启动脚本 launch.mjs、打包脚本 package.mjs
 ```
 
 ## 安全边界（请先读）
@@ -70,3 +87,4 @@ scripts/    启动脚本 launch.mjs
 - 单文件 `vault.pvlt` 为整库读写，条目很多时保存开销会上升。
 - 无跨设备同步；换机器需手动迁移存储目录或导入备份。
 - 界面为简体中文，暂无其他语言。
+- 分发只有 Windows x64 绿色包：靠 `.bat` 启动、控制台窗口即服务进程，没有安装向导、托盘和代码签名。

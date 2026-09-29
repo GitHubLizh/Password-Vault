@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LightMyRequestResponse } from 'fastify';
 import { buildApp } from '../../server/app.js';
-import type { SyncProvider } from '../../server/sync/provider.js';
 
 export const ORIGIN = 'http://127.0.0.1:47821';
 export const HOST = '127.0.0.1:47821';
@@ -27,11 +26,11 @@ export interface Fixture {
 }
 
 // Mirrors the harness in tests/api.test.ts so profile tests exercise the same HTTP seam.
-export async function withVault(operation: (fixture: Fixture) => Promise<void>, options?: { syncProvider?: SyncProvider }): Promise<void> {
+export async function withVault(operation: (fixture: Fixture) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'local-vault-profile-test-'));
   let app: ReturnType<typeof buildApp> | undefined;
   let now = Date.UTC(2026, 0, 2, 3, 4, 5);
-  const createApp = () => buildApp({ directory, origin: ORIGIN, now: () => now, syncProvider: options?.syncProvider });
+  const createApp = () => buildApp({ directory, origin: ORIGIN, now: () => now });
   try {
     app = createApp();
     await operation({

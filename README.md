@@ -28,7 +28,9 @@ npm start       # 启动本地服务（默认 http://127.0.0.1:47821）
 
 ### 非技术用户：免安装绿色包
 
-拿到 `release\PasswordVault-win-x64.zip` 的人只要三步：解压到一个固定位置 → 双击 `启动密码库.bat` → 浏览器自动打开 `http://127.0.0.1:47821`。包里的 `使用说明.txt` 就是写给这类读者的，涵盖主密码不可找回、数据实际存放位置和常见问题。
+拿到 `PasswordVault-win-x64.zip` 的人只要三步：解压到一个固定位置 → 双击 `启动密码库.bat` → 浏览器自动打开 `http://127.0.0.1:47821`。包里的 `使用说明.txt` 就是写给这类读者的，涵盖主密码不可找回、数据实际存放位置和常见问题。
+
+**下载入口**：压缩包作为 GitHub Release 附件发布，不需要自己构建——最新版直链 <https://github.com/GitHubLizh/Password-Vault/releases/latest/download/PasswordVault-win-x64.zip>，发布页 <https://github.com/GitHubLizh/Password-Vault/releases> 有各版本记录。绿色包不入库（`release/` 已被 `.gitignore` 忽略），仓库里只有生成它的脚本。
 
 技术人员制作这个包：
 

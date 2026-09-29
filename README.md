@@ -13,6 +13,8 @@
 
 两条路最终执行的都是同一个服务端入口 `dist-server/server/index.js`，界面、加密和数据位置完全一致；`npm run package` 在组装前会断言 `dist/index.html` 与 `dist-server/server/index.js` 存在，产物缺失就直接失败，因此两边不会悄悄分叉。`VAULT_PORT`（1024–65535）和 `VAULT_DATA_DIR`（绝对路径）对两条入口都生效；服务只监听 `127.0.0.1`，不对外网开放。
 
+重复启动不再弹错误窗口：第二次启动会探到已在运行的实例（`server/instance.ts` 按 `/api/status` 的响应形状认定是自家进程，而不是「端口能连上就算」），打印「密码库已在运行」并打开页面后以 0 退出；只有端口真被别的程序占用时才报「被其他程序占用」并提示换 `VAULT_PORT`。
+
 ### 技术人员：从仓库启动
 
 1. 安装 Node.js 24（项目要求 `>=24.0.0 <25`）。
@@ -39,14 +41,14 @@ npm run package                   # 完整构建 + 组装目录 + 生成 zip
 node scripts/package.mjs --no-build   # 产物已是最新时，跳过构建只重组装
 ```
 
-包结构（实测 zip 38.7 MB，解压后 111.1 MB）：
+包结构（实测 zip 37.3 MB，解压后 103.1 MB）：
 
 ```
 PasswordVault\
   启动密码库.bat      切到 app 目录、用内置 node.exe 拉起服务并打开浏览器
   使用说明.txt        面向非技术用户的四段式说明（用法 / 数据位置 / 备份 / 常见问题）
   runtime\node.exe    内置 Node 24 运行时，用户无需安装 Node
-  app\                dist、dist-server、生产依赖闭包（按 package-lock 计算，共 70 个包）与 type:module 清单
+  app\                dist、dist-server、生产依赖闭包（按 package-lock 计算，共 67 个包）与 type:module 清单
 ```
 
 绿色包只是运行环境的搬运，不改变任何行为：密码库仍写在 `%LOCALAPPDATA%\PasswordVault`，与解压位置无关，换机或删包都不影响数据。压缩包用 PowerShell `Compress-Archive` 生成，它按 UTF-8 记录条目名，中文名的启动脚本和解压后一致。
@@ -87,7 +89,7 @@ npm run package      # 构建并组装 release/ 免安装绿色包
 
 ```
 src/        前端（React 组件、样式、入口）
-server/     Fastify 服务：加密、身份档、存储迁移、目录选择
+server/     Fastify 服务：加密、身份档、存储迁移、目录选择、已运行实例探活
 shared/     前后端共享的类型定义
 tests/      单元测试与 Playwright 端到端测试
 docs/       规格说明（specs/）与架构决策记录（adr/）

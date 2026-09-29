@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "npm run build && tsx watch server/index.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.tests.json",
-    "build": "npm run typecheck && vite build && tsc -p tsconfig.server.json",
+    "clean": "node -e \"const { rmSync } = require('node:fs'); for (const dir of ['dist', 'dist-server']) rmSync(dir, { recursive: true, force: true })\"",
+    "build": "npm run clean && npm run typecheck && vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
     "package": "node scripts/package.mjs",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",

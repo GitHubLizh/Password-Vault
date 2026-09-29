@@ -79,7 +79,8 @@ PasswordVault\
 ```bash
 npm run dev         # 构建后以 tsx watch 启动服务端，改动即重启
 npm run typecheck   # 前端 / 服务端 / 测试三套 tsconfig 全量类型检查
-npm run build       # typecheck + Vite 构建 + 编译服务端
+npm run build       # 清空产物 + typecheck + Vite 构建 + 编译服务端
+npm run clean       # 删除 dist/ 与 dist-server/（tsc 不清理孤立产物，删源码后需靠它）
 npm test            # 单元与接口测试（tests/*.test.ts）
 npm run test:browser # 构建后跑 Playwright 端到端套件
 npm run package      # 构建并组装 release/ 免安装绿色包

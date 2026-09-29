@@ -4,6 +4,7 @@ import { VaultError } from './errors.js';
 import { VaultService } from './vault.js';
 import { StorageLocation } from './storage-location.js';
 import type { FolderPicker } from './folder-picker.js';
+import type { SyncProvider } from './sync/provider.js';
 import { record } from './validation.js';
 
 interface AppOptions {  directory: string;
@@ -11,6 +12,7 @@ interface AppOptions {  directory: string;
   staticDirectory?: string;
   now?: () => number;
   folderPicker?: FolderPicker;
+  syncProvider?: SyncProvider;
 }
 
 // The default profile keeps the historic filename; only additional profiles carry their name, and a
@@ -26,7 +28,7 @@ export function buildApp(options: AppOptions) {
   const app = Fastify({ logger: false, bodyLimit: 128 * 1024, requestTimeout: 15000, connectionTimeout: 20000 });
   let service: VaultService;
   app.addHook('onReady', async () => {
-    service = new VaultService(await StorageLocation.load(options.directory), options.now, options.folderPicker);
+    service = new VaultService(await StorageLocation.load(options.directory), options.now, options.folderPicker, options.syncProvider);
   });
   const authority = new URL(options.origin).host;
 

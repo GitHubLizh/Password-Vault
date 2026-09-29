@@ -9,6 +9,7 @@ import { StorageLocation, storageDirectory } from './storage-location.js';
 import { pickFolder, type FolderPicker } from './folder-picker.js';
 import { MAX_PROFILES, profileName, profileNameKey } from './profile-name.js';
 import { readDefaultProfileName, writeDefaultProfileName } from './profile-config.js';
+import type { SyncProvider } from './sync/provider.js';
 import * as validate from './validation.js';
 
 interface Session {
@@ -70,7 +71,8 @@ export class VaultService {
   private activePicker?: AbortController;
   private readonly timer: ReturnType<typeof setInterval>;
 
-  constructor(private readonly location: StorageLocation, private readonly now = Date.now, private readonly folderPicker: FolderPicker = pickFolder) {
+  // syncProvider is the ticket-002 seam: carried for the sync tickets (004+), deliberately unused until then.
+  constructor(private readonly location: StorageLocation, private readonly now = Date.now, private readonly folderPicker: FolderPicker = pickFolder, readonly syncProvider?: SyncProvider) {
     this.timer = setInterval(() => this.expire(), 1000);
     this.timer.unref();
   }

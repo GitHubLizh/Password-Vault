@@ -2,11 +2,22 @@
 
 一个只跑在本机的密码管理应用：凭据加密保存在你自己的磁盘上，没有云同步、没有第三方服务，浏览器打开 `http://127.0.0.1:47821` 即可使用。
 
-## 快速开始（Windows）
+## 两种启动方式
+
+两条入口是并行设计，不分新旧：按使用者选，不按习惯选。
+
+| 使用者 | 入口 | 前置条件 |
+| --- | --- | --- |
+| 技术人员（改代码、跑测试） | 仓库里的 `启动密码库.cmd`，或 `npm run build && npm start` | 本机装 Node.js 24，项目目录执行过 `npm install` |
+| 非技术用户（只用密码库） | 绿色包里的 `启动密码库.bat` | 不需要装任何东西，包内自带 Node 运行时 |
+
+两条路最终执行的都是同一个服务端入口 `dist-server/server/index.js`，界面、加密和数据位置完全一致；`npm run package` 在组装前会断言 `dist/index.html` 与 `dist-server/server/index.js` 存在，产物缺失就直接失败，因此两边不会悄悄分叉。`VAULT_PORT`（1024–65535）和 `VAULT_DATA_DIR`（绝对路径）对两条入口都生效；服务只监听 `127.0.0.1`，不对外网开放。
+
+### 技术人员：从仓库启动
 
 1. 安装 Node.js 24（项目要求 `>=24.0.0 <25`）。
 2. 在项目目录执行 `npm install`。
-3. 双击 `启动密码库.cmd`——脚本会检查环境、按需构建，然后启动本地服务并打开浏览器。
+3. 双击 `启动密码库.cmd`——`scripts/launch.mjs` 会检查环境和依赖、缺产物时按需构建，然后启动本地服务并打开浏览器。
 
 手动启动：
 
@@ -15,21 +26,28 @@ npm run build   # 类型检查 + 构建前端与服务端
 npm start       # 启动本地服务（默认 http://127.0.0.1:47821）
 ```
 
-环境变量：`VAULT_PORT` 改端口（1024–65535），`VAULT_DATA_DIR` 指定数据目录（绝对路径）。服务只监听 `127.0.0.1`，不对外网开放。
+### 非技术用户：免安装绿色包
 
-## 分发给非技术用户（免安装绿色包）
+拿到 `release\PasswordVault-win-x64.zip` 的人只要三步：解压到一个固定位置 → 双击 `启动密码库.bat` → 浏览器自动打开 `http://127.0.0.1:47821`。包里的 `使用说明.txt` 就是写给这类读者的，涵盖主密码不可找回、数据实际存放位置和常见问题。
 
-`npm run package` 会先完整构建，再组装出 `release\PasswordVault\` 目录并压成 `release\PasswordVault-win-x64.zip`（实测 39 MB，解压后 111 MB）：
+技术人员制作这个包：
+
+```bash
+npm run package                   # 完整构建 + 组装目录 + 生成 zip
+node scripts/package.mjs --no-build   # 产物已是最新时，跳过构建只重组装
+```
+
+包结构（实测 zip 38.7 MB，解压后 111.1 MB）：
 
 ```
 PasswordVault\
-  启动密码库.bat      双击启动：切到 app 目录、用内置 node.exe 拉起服务并打开浏览器
+  启动密码库.bat      切到 app 目录、用内置 node.exe 拉起服务并打开浏览器
   使用说明.txt        面向非技术用户的四段式说明（用法 / 数据位置 / 备份 / 常见问题）
   runtime\node.exe    内置 Node 24 运行时，用户无需安装 Node
   app\                dist、dist-server、生产依赖闭包（按 package-lock 计算，共 70 个包）与 type:module 清单
 ```
 
-绿色包只是运行环境的搬运，不改变任何行为：数据仍写在 `%LOCALAPPDATA%\PasswordVault`（可用 `VAULT_DATA_DIR` 覆盖），换机或删包都不影响密码库文件。构建产物已存在时用 `node scripts/package.mjs --no-build` 跳过构建。压缩包用 PowerShell `Compress-Archive` 生成，它按 UTF-8 记录条目名，中文名启动脚本和解压后一致。
+绿色包只是运行环境的搬运，不改变任何行为：密码库仍写在 `%LOCALAPPDATA%\PasswordVault`，与解压位置无关，换机或删包都不影响数据。压缩包用 PowerShell `Compress-Archive` 生成，它按 UTF-8 记录条目名，中文名的启动脚本和解压后一致。
 
 尚未做的是代码签名：未签名的包从网上下载会触发 Windows SmartScreen「未知发布者」提示，`使用说明.txt` 里已给出「右键属性 → 解除锁定」的绕法。
 

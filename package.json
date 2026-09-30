@@ -15,7 +15,8 @@
     "package": "node scripts/package.mjs",
     "precheck": "node scripts/precheck-release.mjs",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
-    "test:browser": "npm run build && playwright test"
+    "test:browser": "npm run build && playwright test",
+    "test:package": "playwright test --config playwright.package.config.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.4",

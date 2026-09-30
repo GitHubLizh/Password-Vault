@@ -43,7 +43,7 @@ npm run precheck                  # 发布前结构自检，通过才挂 Release
 npm run test:package              # 用包内 node.exe 起服务，真浏览器跑一遍绿色包流程
 ```
 
-发版顺序是 `npm run package && npm run precheck && npm run test:package && gh release create …`，两条闸门失败都返回非 0 退出码，可直接串进 `&&`。`scripts/precheck-release.mjs` 只读不写，专查人容易漏的几件事：`dist-server` 与 `server/`+`shared/` 的源码是否一一对应（源码删了而旧 `.js` 还躺在产物里，就会被打进包）、产物有没有比源码旧、包内 `.bat` 是不是 CRLF 且入口路径正确、包内 `node.exe` 主版本与构建机是否一致、生产依赖齐而开发依赖零混入、zip 有没有早于最近一次涉及交付物的提交、以及 `package.json` 的版本号是否已经被同名 tag 用过。`tests/package.spec.ts` 补的是行为层：它不跑仓库构建，而是用**包内自带的运行时**、从包内 `app/` 目录起服务，在真浏览器里走完建库 → 存条目 → 显示/复制秘密 → 导出备份 → 锁定重解锁 → 窄屏布局，并要求零外部域名请求、零页面报错。发布后再 `gh release download` 取回附件比对 sha256，并确认 latest 直链返回 200。
+发版顺序是 `npm run package && npm run precheck && npm run test:package && gh release create …`，两条闸门失败都返回非 0 退出码，可直接串进 `&&`。`scripts/precheck-release.mjs` 只读不写，专查人容易漏的几件事：`dist-server` 与 `server/`+`shared/` 的源码是否一一对应（源码删了而旧 `.js` 还躺在产物里，就会被打进包）、产物有没有比源码旧、包内 `.bat` 是不是 CRLF 且入口路径正确、包内 `node.exe` 主版本与构建机是否一致、生产依赖齐而开发依赖零混入、zip 有没有早于最近一次**影响包内容**的提交（`package.json` 只算 version 行的改动，改 npm scripts 不算；`scripts/` 下只有 `package.mjs` 计入，另外两个脚本不进包）、以及 `package.json` 的版本号是否已经被同名 tag 用过。`tests/package.spec.ts` 补的是行为层：它不跑仓库构建，而是用**包内自带的运行时**、从包内 `app/` 目录起服务，在真浏览器里走完建库 → 存条目 → 显示/复制秘密 → 导出备份 → 锁定重解锁 → 窄屏布局，并要求零外部域名请求、零页面报错。发布后再 `gh release download` 取回附件比对 sha256，并确认 latest 直链返回 200。
 
 包结构（实测 zip 37.3 MB，解压后 103.1 MB）：
 

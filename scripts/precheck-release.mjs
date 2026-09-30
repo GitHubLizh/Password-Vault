@@ -14,9 +14,21 @@ const infos = [];
 const fail = (message) => problems.push(message);
 const ok = (message) => infos.push(message);
 
-// Paths that actually end up inside the shipped package; docs and tests are excluded on purpose
-// so a README-only commit never makes the package look stale.
-const SHIPPED_SOURCES = ['server', 'shared', 'src', 'scripts', 'index.html', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'package.json', 'package-lock.json'];
+// Paths that actually change the bytes inside the shipped package; docs and tests are excluded on
+// purpose so a README-only commit never makes the package look stale. package.json is narrowed to
+// its "version" line (see VERSION_LINE below) because npm-script edits don't ship, and only
+// scripts/package.mjs counts — the other scripts never enter the package.
+const SHIPPED_SOURCES = ['server', 'shared', 'src', 'scripts/package.mjs', 'index.html', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'package-lock.json'];
+const VERSION_LINE = '/"version":/,+1:package.json';
+
+// Newest commit that could have changed package bytes: whole-file sources, or the version line.
+function newestShippedCommit() {
+  const candidates = [
+    { time: Number(git('log', '-1', '--format=%ct', '--', ...SHIPPED_SOURCES)), subject: git('log', '-1', '--format=%h %s', '--', ...SHIPPED_SOURCES) },
+    { time: Number(git('log', '-1', '--format=%ct', '-L', VERSION_LINE)), subject: git('log', '-1', '--format=%h %s', '-L', VERSION_LINE).split('\n')[0] },
+  ].filter(candidate => Number.isFinite(candidate.time) && candidate.time > 0);
+  return candidates.sort((left, right) => right.time - left.time)[0] ?? null;
+}
 
 async function filesWithExtension(dir, extension, base = dir) {
   if (!existsSync(dir)) return [];
@@ -149,15 +161,15 @@ async function checkPackageFreshness() {
     return;
   }
   const info = await stat(zipFile);
-  const committed = Number(git('log', '-1', '--format=%ct', '--', ...SHIPPED_SOURCES)) * 1000;
+  const newest = newestShippedCommit();
   const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
   const hash = createHash('sha256').update(await readFile(zipFile)).digest('hex');
   infos.push(`zip：${info.size} 字节，sha256 ${hash.slice(0, 16)}…（发布后用同一算法与线上附件比对）`);
 
-  if (committed > info.mtimeMs) {
-    fail(`zip 早于最近一次涉及交付物的提交（${git('log', '-1', '--format=%h %s', '--', ...SHIPPED_SOURCES)}），包里可能是旧代码。重跑 npm run package。`);
+  if (newest && newest.time * 1000 > info.mtimeMs) {
+    fail(`zip 早于最近一次影响包内容的提交（${newest.subject}），包里可能是旧代码。重跑 npm run package。`);
   } else {
-    ok('zip 不早于任何交付物改动');
+    ok(`zip 不早于任何影响包内容的改动（最近一次：${newest?.subject ?? '无'}）`);
   }
   if (git('tag', '-l', `v${version}`)) {
     fail(`标签 v${version} 已存在，说明这个版本发过一次；要发新包先升 package.json 的 version。`);

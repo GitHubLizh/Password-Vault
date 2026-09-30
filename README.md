@@ -39,7 +39,10 @@ npm start       # 启动本地服务（默认 http://127.0.0.1:47821）
 ```bash
 npm run package                   # 完整构建 + 组装目录 + 生成 zip
 node scripts/package.mjs --no-build   # 产物已是最新时，跳过构建只重组装
+npm run precheck                  # 发布前自检，通过才挂 Release
 ```
+
+发版顺序是 `npm run package && npm run precheck && gh release create …`。`scripts/precheck-release.mjs` 只读不写，专查人容易漏的几件事：`dist-server` 与 `server/`+`shared/` 的源码是否一一对应（源码删了而旧 `.js` 还躺在产物里，就会被打进包）、产物有没有比源码旧、包内 `.bat` 是不是 CRLF 且入口路径正确、包内 `node.exe` 主版本与构建机是否一致、生产依赖齐而开发依赖零混入、zip 有没有早于最近一次涉及交付物的提交、以及 `package.json` 的版本号是否已经被同名 tag 用过。
 
 包结构（实测 zip 37.3 MB，解压后 103.1 MB）：
 
@@ -84,6 +87,7 @@ npm run clean       # 删除 dist/ 与 dist-server/（tsc 不清理孤立产物�
 npm test            # 单元与接口测试（tests/*.test.ts）
 npm run test:browser # 构建后跑 Playwright 端到端套件
 npm run package      # 构建并组装 release/ 免安装绿色包
+npm run precheck     # 发布前自检，非 0 退出即不该挂 Release
 ```
 
 ## 目录结构
@@ -94,7 +98,7 @@ server/     Fastify 服务：加密、身份档、存储迁移、目录选择、
 shared/     前后端共享的类型定义
 tests/      单元测试与 Playwright 端到端测试
 docs/       规格说明（specs/）与架构决策记录（adr/）
-scripts/    启动脚本 launch.mjs、打包脚本 package.mjs
+scripts/    启动脚本 launch.mjs、打包脚本 package.mjs、发布前自检 precheck-release.mjs
 ```
 
 ## 安全边界（请先读）

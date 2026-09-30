@@ -84,6 +84,27 @@ async function save(page: Page, name: string) {
   await expect(page.locator('.detail-identity h2')).toHaveText(name);
 }
 
+// Creating a profile is a login-page action: the chips must already be rendered there.
+async function createProfile(page: Page, name: string, password: string) {
+  await page.getByRole('button', { name: '新建身份档', exact: true }).click();
+  await page.getByLabel('身份档名称', { exact: true }).fill(name);
+  await page.getByLabel('设置主密码', { exact: true }).fill(password);
+  await page.getByLabel('确认主密码', { exact: true }).fill(password);
+  await page.getByRole('checkbox').check();
+  await submitPassword(page, '创建并进入');
+  await expect(page.getByRole('heading', { name: '从第一条密码开始' })).toBeVisible();
+  await expect(page.locator('.sidebar-top .eyebrow')).toContainText(name);
+}
+
+// There is no in-session profile switch: the login page is the only place chips are clickable,
+// so every switch walks 锁定 -> pick the target chip -> unlock.
+async function switchProfile(page: Page, name: string, password: string) {
+  await page.getByRole('button', { name: '锁定', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await page.getByRole('button', { name, exact: true }).click();
+  await unlockInPlace(page, password);
+}
+
 test('create and manage three credential types, copy and render safely at desktop/mobile sizes', async ({ page, context }, info) => {
   const foreignRequests: string[] = [];
   const pageErrors: string[] = [];
@@ -601,4 +622,100 @@ test('creates an identity profile from the login page and keeps profiles apart',
   await expect(page.locator('.auth-card .message')).toContainText('身份档「工作」已删除');
   await expect(page.getByRole('button', { name: '工作', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '个人', exact: true })).toBeVisible();
+});
+
+const DRAFT_PASSWORD = 'Vault-UI-草稿档-口令-2026';
+const DRAFT_TEXT = '切档后不该复活的草稿';
+
+// Ticket 004 asked for "two profiles -> switch back and forth -> the draft is gone". A switch can
+// only happen through the login page, so this pins the discard on the switch path itself, which the
+// idle-lock case above does not cover.
+test('switching profiles discards a draft left unsaved in the editor', async ({ page }) => {
+  await page.goto(origin);
+  await createProfile(page, '草稿档', DRAFT_PASSWORD);
+
+  await openEditor(page, '网站与应用');
+  await page.getByLabel('名称 *', { exact: true }).fill(DRAFT_TEXT);
+  await page.getByRole('dialog').getByRole('button', { name: '立即锁定并丢弃未保存内容', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  expect(await page.locator('body').innerText()).not.toContain(DRAFT_TEXT);
+
+  await page.getByRole('button', { name: '个人', exact: true }).click();
+  await unlockInPlace(page, ROTATED);
+  await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill(DRAFT_TEXT);
+  await expect(page.locator('.entry-row')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '没有找到相关条目' })).toBeVisible();
+
+  await switchProfile(page, '草稿档', DRAFT_PASSWORD);
+  await openEditor(page, '网站与应用');
+  await expect(page.getByLabel('名称 *', { exact: true })).toHaveValue('');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('dialog').getByRole('button', { name: '关闭对话框', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+});
+
+const ENTRY_OF_DEFAULT = '默认档条目-搬家前后不变';
+const ENTRY_OF_DRAFT_PROFILE = '草稿档条目-搬家前后不变';
+
+// Ticket 011's acceptance case: the whole profile tree travels to the new directory, both profiles
+// stay unlockable with their own passwords, and a restart still shows them.
+test('storage migration carries every identity profile and they survive a restart', async ({ page }, info) => {
+  // Serial state: the delayed-response case moved the root and the master-password case rotated the
+  // default profile's password, which 个人 now displays.
+  const sourceRoot = JSON.parse(await readFile(join(directory, 'storage-location.json'), 'utf8')).directory as string;
+
+  await page.goto(origin);
+  await unlockInPlace(page, ROTATED);
+  await openEditor(page, '网站与应用');
+  await page.getByLabel('名称 *', { exact: true }).fill(ENTRY_OF_DEFAULT);
+  await page.getByLabel('用户名 / 账号', { exact: true }).fill('migration-default');
+  await save(page, ENTRY_OF_DEFAULT);
+
+  await switchProfile(page, '草稿档', DRAFT_PASSWORD);
+  await openEditor(page, '网站与应用');
+  await page.getByLabel('名称 *', { exact: true }).fill(ENTRY_OF_DRAFT_PROFILE);
+  await page.getByLabel('用户名 / 账号', { exact: true }).fill('migration-draft');
+  await save(page, ENTRY_OF_DRAFT_PROFILE);
+
+  await switchProfile(page, '个人', ROTATED);
+  const defaultBefore = await readFile(join(sourceRoot, 'vault.pvlt'));
+  const draftBefore = await readFile(join(sourceRoot, '草稿档', 'vault.pvlt'));
+
+  await page.getByRole('button', { name: '设置与备份', exact: true }).click();
+  await page.getByRole('button', { name: '修改存储位置', exact: true }).click();
+  const target = join(await realpath(directory), '整栋搬家 目录');
+  await mkdir(target);
+  await page.route('**/api/storage-location/select-folder', route => route.fulfill({ json: { directory: target } }));
+  await page.getByRole('button', { name: '选择文件夹', exact: true }).click();
+  await expect(page.getByLabel('新存储目录', { exact: true })).toHaveText(target);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: '迁移并使用新位置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.locator('.storage-location code')).toHaveText(join(target, 'vault.pvlt'));
+
+  expect((await readFile(join(target, 'vault.pvlt'))).equals(defaultBefore)).toBe(true);
+  expect((await readFile(join(target, '草稿档', 'vault.pvlt'))).equals(draftBefore)).toBe(true);
+  // The abandoned root stays byte-identical as the history copy, and the display name config
+  // deliberately does not travel with it (ticket 011 备注).
+  expect((await readFile(join(sourceRoot, 'vault.pvlt'))).equals(defaultBefore)).toBe(true);
+  expect((await readFile(join(sourceRoot, '草稿档', 'vault.pvlt'))).equals(draftBefore)).toBe(true);
+  expect(JSON.parse(await readFile(join(directory, 'storage-location.json'), 'utf8')).directory).toBe(target);
+
+  const stopped = once(server, 'exit');
+  server.kill();
+  await stopped;
+  await startTestServer();
+
+  await page.goto(origin);
+  await expect(page.getByRole('button', { name: '个人', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '草稿档', exact: true })).toBeVisible();
+  await unlockInPlace(page, ROTATED);
+  await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill(ENTRY_OF_DEFAULT);
+  await expect(page.locator('.entry-row')).toHaveCount(1);
+
+  await switchProfile(page, '草稿档', DRAFT_PASSWORD);
+  await page.getByRole('textbox', { name: '搜索名称、用户名或地址' }).fill(ENTRY_OF_DRAFT_PROFILE);
+  await expect(page.locator('.entry-row')).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath('storage-migration-profiles.png'), fullPage: true });
 });

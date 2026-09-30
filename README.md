@@ -98,7 +98,7 @@ npm run test:package # 用包内 node.exe 起服务，真浏览器跑一遍绿�
 src/        前端（React 组件、样式、入口）
 server/     Fastify 服务：加密、身份档、存储迁移、目录选择、已运行实例探活
 shared/     前后端共享的类型定义
-tests/      单元测试与 Playwright 端到端测试
+tests/      单元与接口测试（`*.test.ts`）、端到端（`browser.spec.ts`）、绿色包回归（`package.spec.ts`）
 docs/       规格说明（specs/）与架构决策记录（adr/）
 scripts/    启动脚本 launch.mjs、打包脚本 package.mjs、发布前自检 precheck-release.mjs
 ```

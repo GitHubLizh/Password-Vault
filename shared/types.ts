@@ -19,8 +19,13 @@ export interface VaultEntry extends EntryInput {
   updatedAt: string;
 }
 
+export interface TrashedEntry extends VaultEntry {
+  deletedAt: string;
+}
+
 export interface VaultSnapshot {
   entries: VaultEntry[];
+  trash: TrashedEntry[];
   settings: { autoLockMinutes: AutoLockMinutes };
   revision: number;
 }

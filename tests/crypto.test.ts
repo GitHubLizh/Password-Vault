@@ -32,6 +32,7 @@ test('real scrypt and AES-256-GCM protect exact Unicode secrets', async t => {
   const vault: VaultSnapshot = {
     revision: 7,
     settings: { autoLockMinutes: 5 },
+    trash: [],
     entries: [
       { ...common, id: randomUUID(), type: 'account', name: '账户-不应出现在密文', password: '  密码\t漢字-e\u0301\n  ' },
       { ...common, id: randomUUID(), type: 'server', name: '服务器-不应出现在密文', password: '\t  SSH-秘密  \n', port: '65535' },

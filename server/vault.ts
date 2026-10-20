@@ -11,6 +11,8 @@ import { MAX_PROFILES, profileName, profileNameKey } from './profile-name.js';
 import { readDefaultProfileName, writeDefaultProfileName } from './profile-config.js';
 import * as validate from './validation.js';
 
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 interface Session {
   token: string;
   profileId: string | null;
@@ -316,7 +318,7 @@ export class VaultService {
     const salt = randomBytes(16);
     const key = await deriveKey(password, salt);
     try {
-      const vault: VaultSnapshot = { entries: [], settings: { autoLockMinutes: 5 }, revision: 1 };
+      const vault: VaultSnapshot = { entries: [], trash: [], settings: { autoLockMinutes: 5 }, revision: 1 };
       const source = encrypt(vault, key, salt);
       await this.atomicWrite(source, null);
       this.clearPending();
@@ -364,8 +366,11 @@ export class VaultService {
       const key = await deriveKey(password, salt);
       try {
         const vault = decrypt(envelope, key);
+        // Expired trash is purged on load so a vault that is never unlocked never grows on disk.
+        const persisted = this.purgeTrash(vault) ? encrypt(vault, key, salt) : null;
+        if (persisted) await this.atomicWrite(persisted, fingerprint(source));
         this.clearPending();
-        return this.beginSession(key, salt, vault, source);
+        return this.beginSession(key, salt, vault, persisted ?? source);
       } catch (error) {
         key.fill(0);
         throw error;
@@ -435,6 +440,15 @@ export class VaultService {
     return this.response(this.requireSession(token));
   }
 
+  private purgeTrash(vault: VaultSnapshot): boolean {
+    const cutoff = this.now() - TRASH_RETENTION_MS;
+    const kept = vault.trash.filter(item => Date.parse(item.deletedAt) >= cutoff);
+    if (kept.length === vault.trash.length) return false;
+    vault.trash = kept;
+    vault.revision++;
+    return true;
+  }
+
   private async persist(session: Session, vault: VaultSnapshot): Promise<VaultResponse> {
     const source = encrypt(vault, session.key, session.salt);
     await this.atomicWrite(source, session.fingerprint);
@@ -476,7 +490,53 @@ export class VaultService {
     this.checkRevision(session, input.revision);
     if (!session.vault.entries.some(item => item.id === id)) throw new VaultError(404, 'NOT_FOUND', '条目不存在。');
     const next = structuredClone(session.vault);
-    next.entries = next.entries.filter(item => item.id !== id);
+    const index = next.entries.findIndex(item => item.id === id);
+    const [removed] = next.entries.splice(index, 1);
+    next.trash.push({ ...removed, deletedAt: new Date(this.now()).toISOString() });
+    next.revision++;
+    return this.persist(session, next);
+  }
+
+  async restoreEntry(token: string | undefined, body: unknown, id: string): Promise<VaultResponse> {
+    const session = this.requireSession(token);
+    const input = validate.record(body);
+    rejectProfileSelector(input);
+    this.checkRevision(session, input.revision);
+    const next = structuredClone(session.vault);
+    const index = next.trash.findIndex(item => item.id === id);
+    if (index < 0) throw new VaultError(404, 'NOT_FOUND', '回收站中没有这个条目。');
+    if (next.entries.length >= 10000) throw new VaultError(400, 'LIMIT', '密码库最多保存 10000 条凭据。');
+    const [item] = next.trash.splice(index, 1);
+    next.entries.push({
+      type: item.type, name: item.name, username: item.username, address: item.address, port: item.port,
+      password: item.password, apiKey: item.apiKey, secret: item.secret, notes: item.notes,
+      id: item.id, createdAt: item.createdAt, updatedAt: new Date(this.now()).toISOString(),
+    });
+    next.revision++;
+    return this.persist(session, next);
+  }
+
+  async destroyEntry(token: string | undefined, body: unknown, id: string): Promise<VaultResponse> {
+    const session = this.requireSession(token);
+    const input = validate.record(body);
+    rejectProfileSelector(input);
+    this.checkRevision(session, input.revision);
+    if (!session.vault.trash.some(item => item.id === id)) throw new VaultError(404, 'NOT_FOUND', '回收站中没有这个条目。');
+    const next = structuredClone(session.vault);
+    next.trash = next.trash.filter(item => item.id !== id);
+    next.revision++;
+    return this.persist(session, next);
+  }
+
+  async emptyTrash(token: string | undefined, body: unknown): Promise<VaultResponse> {
+    const session = this.requireSession(token);
+    const input = validate.record(body);
+    rejectProfileSelector(input);
+    if (input.confirmed !== true) throw new VaultError(400, 'INVALID_INPUT', '请确认清空回收站。');
+    this.checkRevision(session, input.revision);
+    if (session.vault.trash.length === 0) throw new VaultError(400, 'INVALID_INPUT', '回收站已经是空的。');
+    const next = structuredClone(session.vault);
+    next.trash = [];
     next.revision++;
     return this.persist(session, next);
   }
@@ -711,6 +771,7 @@ export class VaultService {
       throw new VaultError(409, 'RESTORE_STALE', '当前身份档已变化，请重新解锁后再恢复。');
     }
     try {
+      if (this.purgeTrash(pending.vault)) pending.source = encrypt(pending.vault, pending.key, pending.salt);
       const safetyBackupPath = await this.atomicWrite(pending.source, pending.expectedFingerprint, true);
       return { ...this.beginSession(pending.key, pending.salt, pending.vault, pending.source), safetyBackupPath };
     } catch (error) {

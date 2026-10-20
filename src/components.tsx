@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import type { EntryInput, EntryType, RestorePreview, SessionResponse, VaultEntry } from '../shared/types';
+import type { EntryInput, EntryType, RestorePreview, SessionResponse, TrashedEntry, VaultEntry } from '../shared/types';
 import { api } from './api';
 
 const iconPaths = {
@@ -68,7 +68,7 @@ export function ErrorMessage({ children }: { children: ReactNode }) {
 function blankEntry(type: EntryType): EntryInput {
   return { type, name: '', username: '', address: '', port: '', password: '', apiKey: '', secret: '', notes: '' };
 }
-function entryInput(entry: VaultEntry): EntryInput {
+export function entryInput(entry: VaultEntry): EntryInput {
   return { type: entry.type, name: entry.name, username: entry.username, address: entry.address, port: entry.port, password: entry.password, apiKey: entry.apiKey, secret: entry.secret, notes: entry.notes };
 }
 function validateEntry(entry: EntryInput): string {
@@ -423,6 +423,21 @@ function DetailField({ label, value, secret = false, multiline = false }: { labe
   </div>;
 }
 
+export function ConfirmDialog({ title, eyebrow, message, confirmLabel, busyLabel, busy, error, conflict, conflictNote, onClose, onConfirm, onReload, onLock, lockSeconds }: {
+  title: string; eyebrow: string; message: string; confirmLabel: string; busyLabel: string;
+  busy: boolean; error: string; conflict: boolean; conflictNote: string;
+  onClose: () => void; onConfirm: () => void; onReload: () => void; onLock: () => void; lockSeconds: number;
+}) {
+  return <Modal title={title} eyebrow={eyebrow} onClose={onClose} closeDisabled={busy} onLock={onLock} lockSeconds={lockSeconds}>
+    <div className="modal-body">
+      <div className="message warning"><Icon name="trash" /><span>{message}</span></div>
+      {error && !conflict && <ErrorMessage>{error}</ErrorMessage>}
+      {conflict && <div className="conflict-note"><p>{conflictNote}</p><button type="button" className="button secondary" onClick={onReload} disabled={busy}>重新载入最新密码库</button></div>}
+    </div>
+    <footer className="modal-footer"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button><button className="button danger" type="button" onClick={onConfirm} disabled={busy || conflict} autoFocus><Icon name="trash" size={17} />{busy ? busyLabel : confirmLabel}</button></footer>
+  </Modal>;
+}
+
 export function EntryDetail({ entry, busy, onEdit, onDelete, onBack, focusOnOpen }: { entry: VaultEntry; busy: boolean; onEdit: () => void; onDelete: () => void; onBack: () => void; focusOnOpen: boolean }) {
   const articleRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -443,5 +458,31 @@ export function EntryDetail({ entry, busy, onEdit, onDelete, onBack, focusOnOpen
     <p className="clipboard-hint"><Icon name="shield" size={16} /><span>秘密显示 30 秒后重新隐藏。复制内容可能留在系统剪贴板历史中，本应用不会自动擦除。</span></p>
     <div className="detail-meta"><span>创建于 <time dateTime={entry.createdAt}>{date(entry.createdAt)}</time></span><span>最近修改 <time dateTime={entry.updatedAt}>{date(entry.updatedAt)}</time></span></div>
     <button className="button danger-ghost" onClick={onDelete} disabled={busy}><Icon name="trash" size={16} />删除此条目</button>
+  </article>;
+}
+
+export function TrashDetail({ entry, busy, onRestore, onDestroy, onBack, focusOnOpen }: {
+  entry: TrashedEntry; busy: boolean; onRestore: () => void; onDestroy: () => void; onBack: () => void; focusOnOpen: boolean;
+}) {
+  const articleRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (focusOnOpen && window.matchMedia('(max-width: 760px)').matches) articleRef.current?.focus();
+  }, [focusOnOpen]);
+  const date = (value: string) => new Date(value).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const remaining = Math.max(0, 30 - Math.floor((Date.now() - Date.parse(entry.deletedAt)) / 86400000));
+  return <article ref={articleRef} tabIndex={-1} className="entry-detail" aria-label={`回收站中${entry.name}的详情`}>
+    <div className="detail-toolbar"><button className="button ghost mobile-back" onClick={onBack}><Icon name="back" size={17} />返回列表</button><span className="eyebrow desktop-only">RECYCLE BIN</span><button className="button primary small" onClick={onRestore} disabled={busy}><Icon name="back" size={16} />恢复条目</button></div>
+    <div className="detail-identity"><span className={`entry-emblem large ${entry.type}`}><Icon name={entry.type} size={30} /></span><span className="type-badge">{typeNames[entry.type]}</span><h2>{entry.name}</h2><p>删除于 {date(entry.deletedAt)}，{remaining} 天后自动彻底清除。</p></div>
+    <div className="detail-fields">
+      <DetailField label={entry.type === 'server' ? '主机地址' : '网站 / 服务地址'} value={entry.address} />
+      <DetailField label={entry.type === 'api' ? '标识 / Access Key ID' : '用户名 / 账号'} value={entry.username} />
+      {entry.type === 'server' && <DetailField label="端口" value={entry.port} />}
+      {entry.type !== 'api' && <DetailField label="密码" value={entry.password} secret />}
+      {entry.type === 'api' && <><DetailField label="API Key" value={entry.apiKey} secret /><DetailField label="Secret" value={entry.secret} secret /></>}
+      {entry.notes && <DetailField label="备注" value={entry.notes} multiline secret />}
+    </div>
+    <p className="clipboard-hint"><Icon name="clock" size={16} /><span>回收站中的条目保留 30 天，到期自动彻底清除。恢复后回到条目列表，id 与创建时间保持不变。</span></p>
+    <div className="detail-meta"><span>创建于 <time dateTime={entry.createdAt}>{date(entry.createdAt)}</time></span><span>删除于 <time dateTime={entry.deletedAt}>{date(entry.deletedAt)}</time></span></div>
+    <button className="button danger-ghost" onClick={onDestroy} disabled={busy}><Icon name="trash" size={16} />彻底删除</button>
   </article>;
 }

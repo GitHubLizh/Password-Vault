@@ -1,4 +1,4 @@
-import type { AutoLockMinutes, EntryInput, VaultEntry, VaultSnapshot } from '../shared/types.js';
+import type { AutoLockMinutes, EntryInput, TrashedEntry, VaultEntry, VaultSnapshot } from '../shared/types.js';
 import { VaultError } from './errors.js';
 
 export function record(value: unknown): Record<string, unknown> {
@@ -75,8 +75,11 @@ export function snapshot(value: unknown): VaultSnapshot {
   if (!Array.isArray(data.entries) || data.entries.length > 10000) {
     throw new VaultError(400, 'INVALID_INPUT', '密码库条目格式不正确或数量超出限制。');
   }
+  if (data.trash !== undefined && (!Array.isArray(data.trash) || data.trash.length > 10000)) {
+    throw new VaultError(400, 'INVALID_INPUT', '回收站格式不正确或数量超出限制。');
+  }
   const ids = new Set<string>();
-  const entries: VaultEntry[] = data.entries.map((raw: unknown) => {
+  const storedEntry = (raw: unknown): VaultEntry => {
     const item = record(raw);
     const id = text(item.id, '条目编号', 36, 36);
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id) || ids.has(id)) {
@@ -89,9 +92,20 @@ export function snapshot(value: unknown): VaultSnapshot {
       throw new VaultError(400, 'INVALID_INPUT', '密码库时间格式不正确。');
     }
     return { ...entryInput(item), id, createdAt, updatedAt };
+  };
+  const entries: VaultEntry[] = data.entries.map(storedEntry);
+  // Vaults written before the recycle bin existed carry no trash field.
+  const trash: TrashedEntry[] = ((data.trash ?? []) as unknown[]).map((raw: unknown) => {
+    const item = record(raw);
+    const deletedAt = text(item.deletedAt, '删除时间', 32, 1);
+    if (!Number.isFinite(Date.parse(deletedAt))) {
+      throw new VaultError(400, 'INVALID_INPUT', '回收站时间格式不正确。');
+    }
+    return { ...storedEntry(item), deletedAt };
   });
   return {
     entries,
+    trash,
     settings: { autoLockMinutes: autoLockMinutes(record(data.settings).autoLockMinutes) },
     revision: revision(data.revision),
   };

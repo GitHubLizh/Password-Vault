@@ -82,6 +82,9 @@ export function buildApp(options: AppOptions) {
   app.post('/api/entries', request => service.run(() => service.saveEntry(token(request.headers.authorization), request.body)));
   app.put<{ Params: { id: string } }>('/api/entries/:id', request => service.run(() => service.saveEntry(token(request.headers.authorization), request.body, request.params.id)));
   app.delete<{ Params: { id: string } }>('/api/entries/:id', request => service.run(() => service.deleteEntry(token(request.headers.authorization), request.body, request.params.id)));
+  app.post<{ Params: { id: string } }>('/api/trash/:id/restore', request => service.run(() => service.restoreEntry(token(request.headers.authorization), request.body, request.params.id)));
+  app.delete<{ Params: { id: string } }>('/api/trash/:id', request => service.run(() => service.destroyEntry(token(request.headers.authorization), request.body, request.params.id)));
+  app.delete('/api/trash', request => service.run(() => service.emptyTrash(token(request.headers.authorization), request.body)));
   app.put('/api/settings', request => service.run(() => service.settings(token(request.headers.authorization), request.body)));
   app.post('/api/storage-location', request => service.run(() => service.changeStorageLocation(token(request.headers.authorization), request.body)));
   app.post('/api/storage-location/select-folder', async (request, reply) => {

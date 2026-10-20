@@ -86,6 +86,15 @@ export const api = {
   remove: (token: string, id: string, revision: number) => request<VaultResponse>(
     `/entries/${encodeURIComponent(id)}`, { method: 'DELETE', token, body: { revision } },
   ),
+  restore: (token: string, id: string, revision: number) => request<VaultResponse>(
+    `/trash/${encodeURIComponent(id)}/restore`, { method: 'POST', token, body: { revision } },
+  ),
+  destroy: (token: string, id: string, revision: number) => request<VaultResponse>(
+    `/trash/${encodeURIComponent(id)}`, { method: 'DELETE', token, body: { revision } },
+  ),
+  emptyTrash: (token: string, revision: number) => request<VaultResponse>(
+    '/trash', { method: 'DELETE', token, body: { revision, confirmed: true } },
+  ),
   settings: (token: string, autoLockMinutes: AutoLockMinutes, revision: number) => request<VaultResponse>(
     '/settings', { method: 'PUT', token, body: { autoLockMinutes, revision } },
   ),

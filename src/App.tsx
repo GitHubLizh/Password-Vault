@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AutoLockMinutes, EntryInput, EntryType, ProfileSummary, SessionResponse, TrashedEntry, VaultEntry, VaultResponse, VaultStatus } from '../shared/types';
 import { api, ApiError } from './api';
-import { ChangeMasterPasswordDialog, ConfirmDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, TrashDetail, typeNames } from './components';
+import { ChangeMasterPasswordDialog, ConfirmDialog, DeleteProfileDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, TrashDetail, typeNames } from './components';
 import type { IconName } from './components';
 
 type Category = 'all' | EntryType;
@@ -69,6 +69,7 @@ export default function App() {
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [creatingProfile, setCreatingProfile] = useState(false);
+  const [deleteProfileTarget, setDeleteProfileTarget] = useState<ProfileSummary | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [masterPasswordOpen, setMasterPasswordOpen] = useState(false);
   const [masterPasswordReloadRequired, setMasterPasswordReloadRequired] = useState(false);
@@ -118,6 +119,7 @@ export default function App() {
     setStorageOpen(false);
     setMasterPasswordOpen(false);
     setMasterPasswordReloadRequired(false);
+    setDeleteProfileTarget(null);
     setSelectedProfileId(null);
     setCreatingProfile(false);
     setSearch('');
@@ -517,6 +519,30 @@ export default function App() {
       if (isCurrent(version)) { busyRef.current = false; setBusy(null); }
     }
   };
+  // The login-page delete: no session exists, so the typed name plus a password that opens the
+  // target vault or the default vault are the only gates.
+  const deleteLockedProfile = async (name: string, password: string) => {
+    if (busyRef.current || lockPending) return;
+    const version = epoch.current;
+    busyRef.current = true;
+    setAuthBusy(true);
+    setError('');
+    try {
+      const result = await api.deleteLockedProfile(name, password);
+      const remaining = await api.profiles();
+      if (!isCurrent(version)) return;
+      setProfiles(remaining.profiles);
+      setStatus(result.status);
+      if (selectedProfileId === name) setSelectedProfileId(null);
+      setCreatingProfile(false);
+      setDeleteProfileTarget(null);
+      setNotice(`身份档「${name}」已删除。安全副本 ${result.safetyBackupPath} 仍可用该档主密码解开，不需要时请手动删除。`);
+    } catch (cause) {
+      if (isCurrent(version)) setError(errorText(cause));
+    } finally {
+      if (isCurrent(version)) { busyRef.current = false; setAuthBusy(false); }
+    }
+  };
   const renameDefaultProfile = async (name: string) => {
     const version = epoch.current;
     if (busyRef.current || !isActive(version) || !sessionRef.current) return;
@@ -609,7 +635,14 @@ export default function App() {
           {error && <ErrorMessage>{error}</ErrorMessage>}
           {statusLoading && profiles.length === 0 ? <p className="loading-state" role="status">正在读取本地密码库状态…</p> : status ? <>
             {profiles.length > 0 && <div className="profile-picker" role="group" aria-label="选择身份档">
-              {profiles.map(profile => <button key={profile.id ?? 'default'} type="button" className={`profile-chip${!creatingProfile && selectedProfile?.id === profile.id ? ' selected' : ''}`} aria-pressed={!creatingProfile && selectedProfile?.id === profile.id} onClick={() => { if (authBusy || lockPending) return; setCreatingProfile(false); setSelectedProfileId(profile.id); }} disabled={authBusy || lockPending}>{profile.name}</button>)}
+              {profiles.map(profile => {
+                const selected = !creatingProfile && selectedProfile?.id === profile.id;
+                const chip = <button type="button" className={`profile-chip${selected ? ' selected' : ''}${profile.broken ? ' broken' : ''}`} aria-pressed={selected} title={profile.broken ? '库文件无法读取，可能已损坏：无法用主密码解锁。' : undefined} onClick={() => { if (authBusy || lockPending) return; setCreatingProfile(false); setSelectedProfileId(profile.id); }} disabled={authBusy || lockPending}>{profile.name}</button>;
+                if (profile.isDefault) return <span key={profile.id ?? 'default'} className="profile-chip-wrap">{chip}</span>;
+                return <span key={profile.id} className="profile-chip-wrap">{chip}
+                  <button type="button" className="profile-chip-remove" aria-label={`删除身份档「${profile.name}」`} title={`删除身份档「${profile.name}」`} onClick={() => { if (authBusy || lockPending) return; setError(''); setNotice(''); setDeleteProfileTarget(profile); }} disabled={authBusy || lockPending}><Icon name="trash" size={11} /></button>
+                </span>;
+              })}
               <button type="button" className={`profile-chip profile-add${creatingProfile ? ' selected' : ''}`} aria-pressed={creatingProfile} onClick={() => { if (authBusy || lockPending) return; setSelectedProfileId(null); setCreatingProfile(true); setError(''); }} disabled={authBusy || lockPending}><Icon name="plus" size={13} />新建身份档</button>
             </div>}
             <AuthForm key={`${authMode.kind}-${selectedProfile?.id ?? 'default'}-${currentEpoch}`} mode={authMode} busy={authBusy || lockPending || restoreOpen} onSubmit={(name, password) => void authenticate(name, password)} />
@@ -657,6 +690,7 @@ export default function App() {
     {editor && session && <EntryEditor entry={editor.entry} initialType={editor.type} busy={!!busy} error={error} conflict={conflict} reloaded={editor.reloaded} onClose={() => { setEditor(null); setError(''); setConflict(false); }} onSave={saveEntry} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
     {storageOpen && session && <StorageLocationDialog token={session.token} storagePath={status?.storagePath ?? ''} busy={!!busy} error={error} onClose={() => { if (!busyRef.current) { setStorageOpen(false); setError(''); } }} onSubmit={directory => void changeStorageLocation(directory)} onLock={() => lock()} lockSeconds={seconds} onFailure={cause => handleFailure(cause, currentEpoch)} onClearError={() => setError('')} />}
     {restoreOpen && <RestoreDialog token={session?.token} hasVault={status?.exists ?? false} onClose={() => setRestoreOpen(false)} onSuccess={result => installSession(result, currentEpoch)} onFailure={cause => handleFailure(cause, currentEpoch)} onLock={session ? () => lock() : undefined} lockSeconds={session ? seconds : undefined} />}
+    {deleteProfileTarget && !session && <DeleteProfileDialog profileName={deleteProfileTarget.name} broken={deleteProfileTarget.broken === true} busy={authBusy} error={error} onClose={() => { if (!busyRef.current) { setDeleteProfileTarget(null); setError(''); } }} onConfirm={password => void deleteLockedProfile(deleteProfileTarget.name, password)} />}
     {deletedEntry && <div className="undo-toast" role="status"><Icon name="trash" size={19} /><span>条目「{deletedEntry.name}」已移入回收站</span><button className="button primary small" onClick={undoDelete} disabled={!!busy}><Icon name="back" size={15} />撤销删除</button><button className="icon-button" onClick={() => setDeletedEntry(null)} aria-label="关闭提示"><Icon name="close" size={15} /></button></div>}
     {deleteTarget && session && <ConfirmDialog title="删除条目" eyebrow="DELETE ITEM" message={`确定删除「${deleteTarget.name}」？条目会移入回收站，30 天内可以随时恢复。`} confirmLabel="确认删除" busyLabel="正在删除…" busy={!!busy} error={error} conflict={conflict} conflictNote="库版本已变化，本次删除没有执行。重新载入最新版本后再确认。" onClose={() => { if (!busyRef.current) { setDeleteTarget(null); setError(''); setConflict(false); } }} onConfirm={() => removeEntry(deleteTarget)} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
     {destroyTarget && session && <ConfirmDialog title="彻底删除" eyebrow="DELETE FOREVER" message={`确定彻底删除「${destroyTarget.name}」？条目将从回收站移除，此操作不可撤销。`} confirmLabel="彻底删除" busyLabel="正在删除…" busy={!!busy} error={error} conflict={conflict} conflictNote="库版本已变化，本次删除没有执行。重新载入最新版本后再确认。" onClose={() => { if (!busyRef.current) { setDestroyTarget(null); setError(''); setConflict(false); } }} onConfirm={() => destroyEntry(destroyTarget)} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}

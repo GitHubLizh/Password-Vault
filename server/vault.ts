@@ -1,8 +1,8 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, open, readFile, readdir, realpath, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ChangeMasterPasswordResponse, DeleteProfileResponse, FolderSelectionResponse, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
-import { listProfileIds } from './profile-store.js';
+import type { ChangeMasterPasswordResponse, DeleteProfileResponse, FolderSelectionResponse, ProfileSummary, ProfilesResponse, RestorePreview, SessionResponse, StorageLocationResponse, VaultResponse, VaultSnapshot, VaultStatus } from '../shared/types.js';
+import { listProfileIds, VAULT_FILE } from './profile-store.js';
 import { decrypt, deriveKey, encrypt, MAX_VAULT_BYTES, parseEnvelope } from './crypto.js';
 import { VaultError } from './errors.js';
 import { StorageLocation, storageDirectory } from './storage-location.js';
@@ -150,10 +150,10 @@ export class VaultService {
     return `profile:${this.activeProfileId ?? ''}`;
   }
 
-  private async readSource(): Promise<string | null> {
+  private async readSource(path: string = this.storagePath): Promise<string | null> {
     let info;
     try {
-      info = await stat(this.storagePath);
+      info = await stat(path);
     } catch (error) {
       if (missing(error)) return null;
       throw error;
@@ -161,7 +161,7 @@ export class VaultService {
     if (!info.isFile() || info.size > MAX_VAULT_BYTES) {
       throw new VaultError(400, 'INVALID_VAULT', '密码库文件异常或过大，请从有效备份恢复。');
     }
-    return readFile(this.storagePath, 'utf8');
+    return readFile(path, 'utf8');
   }
 
   private async atomicWrite(source: string, expected: string | null, safetyBackup = false, beforeReplace?: () => void): Promise<string | undefined> {
@@ -244,25 +244,97 @@ export class VaultService {
 
   private get profileConfigPath(): string { return join(this.location.profileDirectory, 'profiles.json'); }
 
+  // Structural readability only: a profile whose vault.pvlt fails to parse as a v1 envelope can
+  // never be unlocked, and the login page says so. No password is involved and no content is read.
+  private async vaultParses(vaultPath: string): Promise<boolean> {
+    try {
+      parseEnvelope(await readFile(vaultPath, 'utf8'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async profiles(): Promise<ProfilesResponse> {
     const defaultName = await readDefaultProfileName(this.profileConfigPath);
-    return { profiles: (await listProfileIds(this.rootDirectory)).map(id => ({
-      id: id === '' ? null : id,
-      name: id === '' ? defaultName : id,
-      isDefault: id === '',
-    })) };
+    const profiles: ProfileSummary[] = [];
+    for (const id of await listProfileIds(this.rootDirectory)) {
+      const vaultPath = id === '' ? this.rootStoragePath : join(this.rootDirectory, id, VAULT_FILE);
+      const summary: ProfileSummary = { id: id === '' ? null : id, name: id === '' ? defaultName : id, isDefault: id === '' };
+      if (!(await this.vaultParses(vaultPath))) summary.broken = true;
+      profiles.push(summary);
+    }
+    return { profiles };
   }
 
   async deleteProfile(token: string | undefined, body: unknown): Promise<DeleteProfileResponse> {
-    const session = this.requireSession(token);
+    this.expire();
+    if (this.session && matches(token, this.session.token)) {
+      const session = this.session;
+      const input = validate.record(body);
+      rejectProfileSelector(input);
+      if (session.profileId === null) throw new VaultError(400, 'DEFAULT_PROFILE_UNDELETABLE', '默认身份档不能删除。');
+      if (input.confirmed !== true || input.name !== session.profileId) {
+        throw new VaultError(400, 'INVALID_INPUT', '请输入该身份档的名称以确认删除。');
+      }
+      this.checkRevision(session, input.revision);
+      return this.removeProfileFiles(session.profileId, session.fingerprint);
+    }
+    // No unlocked session: the login page may still remove a locked, non-default profile it can name.
+    // Naming the profile proves nothing by itself (the name is public on the login page), so the caller
+    // must also open one of two vaults with a single password: the target's own, or the default's when
+    // the target password was forgotten.
     const input = validate.record(body);
-    rejectProfileSelector(input);
-    if (session.profileId === null) throw new VaultError(400, 'DEFAULT_PROFILE_UNDELETABLE', '默认身份档不能删除。');
-    if (input.confirmed !== true || input.name !== session.profileId) {
+    if (input.profile === undefined) throw new VaultError(401, 'LOCKED', '密码库已锁定，请重新输入主密码。');
+    const profile = profileName(input.profile);
+    if (input.confirmed !== true || input.name !== profile) {
       throw new VaultError(400, 'INVALID_INPUT', '请输入该身份档的名称以确认删除。');
     }
-    this.checkRevision(session, input.revision);
-    const directory = this.profileDirectory;
+    const password = validate.password(input.password);
+    const ids = await listProfileIds(this.rootDirectory);
+    if (!ids.includes(profile)) throw new VaultError(404, 'PROFILE_NOT_FOUND', '没有找到这个身份档，请重新选择。');
+    if (ids.length <= 1) {
+      throw new VaultError(409, 'LAST_PROFILE', '这是最后一个身份档，删除后本机将没有任何密码库。如需清空全部数据，请在文件管理器中直接处理存储目录。');
+    }
+    // Both candidate vaults' budgets are spent before any scrypt work: this endpoint must not become a
+    // cheaper brute-force path than unlock.
+    this.throttle(`profile:${profile}`);
+    this.throttle('profile:');
+    const verified = await this.passwordOpens(join(this.rootDirectory, profile, VAULT_FILE), password)
+      || await this.passwordOpens(this.rootStoragePath, password);
+    if (!verified) {
+      throw new VaultError(400, 'DECRYPT_FAILED', '口令不正确：请输入该身份档的主密码；忘记时可输入默认身份档的主密码。');
+    }
+    return this.removeProfileFiles(profile);
+  }
+
+  // Checks a password against one vault file without establishing a session. A missing or unreadable
+  // file simply fails: the caller treats that as "this password path is unavailable".
+  private async passwordOpens(vaultPath: string, password: string): Promise<boolean> {
+    let source: string | null;
+    try {
+      source = await this.readSource(vaultPath);
+    } catch {
+      return false;
+    }
+    if (source === null) return false;
+    try {
+      const envelope = parseEnvelope(source);
+      const key = await deriveKey(password, Buffer.from(envelope.salt, 'base64'));
+      try {
+        decrypt(envelope, key);
+        return true;
+      } finally {
+        key.fill(0);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  private async removeProfileFiles(profileId: string, expectedFingerprint?: string): Promise<DeleteProfileResponse> {
+    const directory = join(this.rootDirectory, profileId);
+    const vaultPath = join(directory, VAULT_FILE);
     const guardPath = join(directory, 'vault.write-lock');
     const guard = await open(guardPath, 'wx', 0o600).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'EEXIST') throw new VaultError(409, 'FILE_BUSY', '这个身份档正在被写入，请稍后再试。');
@@ -270,8 +342,9 @@ export class VaultService {
     });
     let safetyBackupPath = '';
     try {
-      const source = await this.readSource();
-      if (source === null || fingerprint(source) !== session.fingerprint) {
+      const source = await this.readSource(vaultPath);
+      if (source === null) throw new VaultError(404, 'PROFILE_NOT_FOUND', '没有找到这个身份档，请重新选择。');
+      if (expectedFingerprint !== undefined && fingerprint(source) !== expectedFingerprint) {
         throw new VaultError(409, 'FILE_CHANGED', '磁盘中的密码库已变化，请重新解锁后再删除。');
       }
       // The copy is written before anything is removed: an interrupted delete must leave a decryptable file.
@@ -283,7 +356,7 @@ export class VaultService {
       } finally {
         await backup.close();
       }
-      await unlink(this.storagePath);
+      await unlink(vaultPath);
       for (const name of await readdir(directory)) {
         if (name === 'vault.write-lock' || (name.startsWith('.vault-') && name.endsWith('.tmp'))) {
           await unlink(join(directory, name)).catch(() => undefined);
@@ -296,8 +369,10 @@ export class VaultService {
       await guard.close().catch(() => undefined);
       await unlink(guardPath).catch(() => undefined);
     }
-    this.clearSession();
-    this.clearPending();
+    // A delete must kill any session still holding this profile before its files are gone, so an
+    // in-flight save from another tab cannot resurrect vault.pvlt.
+    if (this.session?.profileId === profileId) this.clearSession();
+    if (this.pending?.profileId === profileId) this.clearPending();
     return { status: await this.status(), safetyBackupPath };
   }
 

@@ -30,6 +30,11 @@ async function unlockAttempt(fixture: Fixture, body: Record<string, unknown>): P
   return fixture.api('POST', '/api/unlock', { body });
 }
 
+async function deleteAttempt(fixture: Fixture, body: unknown): Promise<LightMyRequestResponse> {
+  fixture.advance(1000);
+  return fixture.api('DELETE', '/api/profiles', { body });
+}
+
 async function unlock(fixture: Fixture, profile: string | null, password: string): Promise<SessionResponse> {
   return success<SessionResponse>(await unlockAttempt(fixture, { profile, password }));
 }
@@ -91,8 +96,8 @@ test('profile list discovers nested vaults, survives restart and keeps the defau
 
     assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
       { id: null, name: '默认', isDefault: true },
-      { id: 'alpha', name: 'alpha', isDefault: false },
-      { id: 'beta', name: 'beta', isDefault: false },
+      { id: 'alpha', name: 'alpha', isDefault: false, broken: true },
+      { id: 'beta', name: 'beta', isDefault: false, broken: true },
     ]);
 
     const reopened = success<SessionResponse>(await fixture.api('POST', '/api/unlock', { body: { password: PASSWORD } }));
@@ -367,6 +372,141 @@ test('deleting a profile leaves unrelated files in its directory alone', async (
       token: work.token, body: { name: '工作', confirmed: true, revision: work.vault.revision },
     }));
     assert.deepEqual(await readdir(join(fixture.directory, '工作')), ['我的笔记.txt']);
+  });
+});
+
+test('a locked profile can be deleted from the login page only with a valid password', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    await fixture.api('POST', '/api/lock', { token: filled.token });
+    const body = (password: unknown) => ({ profile: '工作', name: '工作', confirmed: true, password });
+
+    // Without a named profile the request still means the old session-bound flow.
+    failure(await fixture.api('DELETE', '/api/profiles', { body: { name: '工作', confirmed: true, revision: filled.vault.revision } }), 401, 'LOCKED');
+    failure(await deleteAttempt(fixture, { ...body('x'), name: '别的名字' }), 400, 'INVALID_INPUT');
+    failure(await deleteAttempt(fixture, { ...body('x'), confirmed: false }), 400, 'INVALID_INPUT');
+    failure(await deleteAttempt(fixture, { profile: '没有这个档', name: '没有这个档', confirmed: true, password: OTHER }), 404, 'PROFILE_NOT_FOUND');
+    failure(await deleteAttempt(fixture, { profile: '../逃逸', name: '../逃逸', confirmed: true, password: OTHER }), 400, 'INVALID_PROFILE_NAME');
+    failure(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true }), 400, 'INVALID_INPUT');
+    // The profile name is public on the login page, so it must never be enough on its own.
+    failure(await deleteAttempt(fixture, body('错的口令-2026-abcd')), 400, 'DECRYPT_FAILED');
+    // That attempt spent both slots' budgets: even the right password is throttled for a second,
+    // and so is a default-profile unlock through the shared slot.
+    failure(await fixture.api('DELETE', '/api/profiles', { body: body(OTHER) }), 429, 'TRY_LATER');
+    failure(await fixture.api('POST', '/api/unlock', { body: { password: PASSWORD } }), 429, 'TRY_LATER');
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'refused deletes must not touch anything');
+    assert.ok(await readVault(await profileVault(fixture, '工作')), 'the locked profile must still be on disk');
+
+    const deleted = success<DeleteProfileResponse>(await deleteAttempt(fixture, body(OTHER)));
+    assert.match(deleted.safetyBackupPath, /before-delete-.*\.pvlt$/);
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+    ]);
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'a login-page delete must not touch the default vault');
+    assert.deepEqual(await readdir(join(fixture.directory, '工作')), []);
+
+    const preview = success<RestorePreview>(await fixture.api('POST', '/api/restore/preview', {
+      body: { backup: await readFile(deleted.safetyBackupPath, 'utf8'), password: OTHER },
+    }));
+    assert.equal(preview.entryCount, 1, 'the safety copy must still decrypt with the deleted profile password');
+    success(await fixture.api('POST', '/api/restore/cancel', { body: { restoreToken: preview.restoreToken } }));
+  });
+});
+
+test("the default profile's password also unlocks a login-page delete", async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    await fixture.api('POST', '/api/lock', { token: filled.token });
+
+    // The forgotten-password path: the default profile's master password stands in.
+    const deleted = success<DeleteProfileResponse>(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: PASSWORD }));
+    assert.match(deleted.safetyBackupPath, /before-delete-.*\.pvlt$/);
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+    ]);
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'the default vault must stay byte-identical');
+    const preview = success<RestorePreview>(await fixture.api('POST', '/api/restore/preview', {
+      body: { backup: await readFile(deleted.safetyBackupPath, 'utf8'), password: OTHER },
+    }));
+    assert.equal(preview.entryCount, 1, 'the safety copy must still decrypt with the deleted profile password');
+    success(await fixture.api('POST', '/api/restore/cancel', { body: { restoreToken: preview.restoreToken } }));
+  });
+});
+
+test('the login-page delete refuses to remove the last remaining profile', async () => {
+  await withVault(async fixture => {
+    await enter(fixture, '工作');
+    const source = await readVault(await profileVault(fixture, '工作'));
+    failure(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: OTHER }), 409, 'LAST_PROFILE');
+    assert.equal(await readVault(await profileVault(fixture, '工作')), source, 'a refused delete must leave the vault in place');
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: '工作', name: '工作', isDefault: false },
+    ]);
+  });
+});
+
+test('the login-page delete keeps an unrelated unlocked session working', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    await enter(fixture, '工作');
+    const reopened = await unlock(fixture, null, PASSWORD);
+
+    success<DeleteProfileResponse>(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: PASSWORD }));
+    const stillOpen = success<VaultResponse>(await fixture.api('GET', '/api/vault', { token: reopened.token }));
+    assert.deepEqual(stillOpen.vault.entries.map(entry => entry.name), ['默认档的条目']);
+  });
+});
+
+test('the login-page delete kills a session that still holds the profile and cannot be resurrected', async () => {
+  await withVault(async fixture => {
+    await fixture.api('POST', '/api/create', { body: { password: PASSWORD } });
+    const work = await enter(fixture, '工作');
+
+    const deleted = success<DeleteProfileResponse>(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: PASSWORD }));
+    assert.match(deleted.safetyBackupPath, /before-delete-.*\.pvlt$/);
+    failure(await fixture.api('GET', '/api/vault', { token: work.token }), 401, 'LOCKED');
+    assert.deepEqual(await readdir(join(fixture.directory, '工作')), [], 'no in-flight save may resurrect vault.pvlt');
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+    ]);
+  });
+});
+
+test('a profile whose vault cannot parse is flagged broken and deletable only via the default password', async () => {
+  await withVault(async fixture => {
+    const initial = success<SessionResponse>(await fixture.api('POST', '/api/create', { body: { password: PASSWORD } }));
+    await addEntry(fixture, initial, '默认档的条目');
+    const defaultSource = await readVault(fixture.storagePath);
+    const work = await enter(fixture, '工作');
+    const filled = await addEntry(fixture, work, '工作档的条目');
+    await fixture.api('POST', '/api/lock', { token: filled.token });
+    await writeFile(await profileVault(fixture, '工作'), 'not a vault at all', 'utf8');
+
+    const listed = success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles;
+    assert.deepEqual(listed[0], { id: null, name: '默认', isDefault: true }, 'a healthy profile carries no extra keys');
+    assert.deepEqual(listed[1], { id: '工作', name: '工作', isDefault: false, broken: true });
+
+    // The right password cannot open a broken vault either — unlock is dead for this profile.
+    failure(await unlockAttempt(fixture, { profile: '工作', password: OTHER }), 400, 'INVALID_VAULT');
+    // Its own password can no longer be verified, so the delete gate refuses it.
+    failure(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: OTHER }), 400, 'DECRYPT_FAILED');
+    assert.equal(await readVault(fixture.storagePath), defaultSource, 'nothing may touch the default vault along the way');
+
+    const deleted = success<DeleteProfileResponse>(await deleteAttempt(fixture, { profile: '工作', name: '工作', confirmed: true, password: PASSWORD }));
+    assert.equal(await readFile(deleted.safetyBackupPath, 'utf8'), 'not a vault at all', 'the safety copy keeps the raw bytes');
+    assert.deepEqual(await readdir(join(fixture.directory, '工作')), []);
+    assert.deepEqual(success<ProfilesResponse>(await fixture.api('GET', '/api/profiles')).profiles, [
+      { id: null, name: '默认', isDefault: true },
+    ]);
   });
 });
 

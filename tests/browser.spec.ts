@@ -745,3 +745,72 @@ test('storage migration carries every identity profile and they survive a restar
   await expect(page.locator('.entry-row')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('storage-migration-profiles.png'), fullPage: true });
 });
+
+// A locked profile whose password is forgotten has no settings-page entry point (that one requires
+// an unlocked session), so the login page must be able to remove it on its own — behind a
+// name-and-password gate, because the name alone is public information on that very page.
+test('deletes a locked profile from the login page behind the name-and-password gate', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(origin);
+  await createProfile(page, '弃用档', PROFILE_PASSWORD);
+
+  await page.getByRole('button', { name: '锁定', exact: true }).click();
+  await expect(page.getByRole('button', { name: '弃用档', exact: true })).toBeVisible();
+
+  // Every non-default chip carries a small delete badge at its top-right, selected or not; the
+  // default profile never does.
+  await expect(page.getByRole('button', { name: /删除身份档「个人」/ })).toHaveCount(0);
+  const remove = page.getByRole('button', { name: '删除身份档「弃用档」' });
+  await expect(remove).toBeVisible();
+  await remove.click();
+
+  const confirm = page.getByRole('button', { name: '删除身份档', exact: true });
+  await expect(confirm).toBeDisabled();
+  await page.getByLabel('输入身份档名称以确认', { exact: true }).fill('弃用档');
+  await expect(confirm).toBeDisabled();
+  // A password that opens neither the target nor the default vault must be refused.
+  await page.getByLabel('删除口令', { exact: true }).fill('完全错误的口令-2026');
+  await expect(confirm).toBeEnabled();
+  if (Date.now() < nextPasswordAttempt) {
+    await expect.poll(() => Date.now(), { intervals: [100], timeout: 2500 }).toBeGreaterThanOrEqual(nextPasswordAttempt);
+  }
+  nextPasswordAttempt = Date.now() + 1100;
+  await confirm.click();
+  await expect(page.locator('.modal .message.error')).toContainText('口令不正确');
+
+  // The forgotten-password path: the default profile's (rotated) master password stands in.
+  await page.getByLabel('删除口令', { exact: true }).fill(ROTATED);
+  if (Date.now() < nextPasswordAttempt) {
+    await expect.poll(() => Date.now(), { intervals: [100], timeout: 2500 }).toBeGreaterThanOrEqual(nextPasswordAttempt);
+  }
+  nextPasswordAttempt = Date.now() + 1100;
+  await confirm.click();
+
+  await expect(page.getByRole('button', { name: '弃用档', exact: true })).toHaveCount(0);
+  await expect(page.locator('.auth-card .message')).toContainText('身份档「弃用档」已删除');
+  await expect(page.locator('.auth-card .message')).toContainText('安全副本');
+  await expect(page.getByRole('button', { name: '个人', exact: true })).toBeVisible();
+  // Earlier tickets may leave fixture directories that legitimately count as profiles (disk-as-truth),
+  // so only the deleted profile's own affordance is asserted gone here.
+  await expect(page.getByRole('button', { name: '删除身份档「弃用档」' })).toHaveCount(0);
+
+  // The migration fixture from an earlier ticket holds an unparsable vault: it must be flagged as
+  // unreadable on the login page, and being broken its own password path is gone — only the
+  // default profile's password may remove it.
+  const deadChip = page.getByRole('button', { name: 'already-occupied', exact: true });
+  await expect(deadChip).toHaveClass(/broken/);
+  await page.getByRole('button', { name: '删除身份档「already-occupied」' }).click();
+  const deadConfirm = page.getByRole('button', { name: '删除身份档', exact: true });
+  await expect(page.locator('.modal .message.warning')).toContainText('库文件已无法读取');
+  await page.getByLabel('输入身份档名称以确认', { exact: true }).fill('already-occupied');
+  await page.getByLabel('删除口令', { exact: true }).fill(ROTATED);
+  await expect(deadConfirm).toBeEnabled();
+  if (Date.now() < nextPasswordAttempt) {
+    await expect.poll(() => Date.now(), { intervals: [100], timeout: 2500 }).toBeGreaterThanOrEqual(nextPasswordAttempt);
+  }
+  nextPasswordAttempt = Date.now() + 1100;
+  await deadConfirm.click();
+  await expect(page.getByRole('button', { name: 'already-occupied', exact: true })).toHaveCount(0);
+  await expect(page.locator('.auth-card .message')).toContainText('身份档「already-occupied」已删除');
+  await expect(page.getByRole('button', { name: '草稿档', exact: true })).toBeVisible();
+});

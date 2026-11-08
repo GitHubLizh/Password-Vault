@@ -34,6 +34,8 @@ export interface ProfileSummary {
   id: string | null;
   name: string;
   isDefault: boolean;
+  /** Present only when the vault file exists but does not parse as a v1 envelope. */
+  broken?: true;
 }
 
 export interface ProfilesResponse {

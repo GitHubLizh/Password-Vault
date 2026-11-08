@@ -75,6 +75,9 @@ export const api = {
   deleteProfile: (token: string, name: string, revision: number) => request<DeleteProfileResponse>('/profiles', {
     method: 'DELETE', token, body: { name, confirmed: true, revision },
   }),
+  deleteLockedProfile: (name: string, password: string) => request<DeleteProfileResponse>('/profiles', {
+    method: 'DELETE', body: { profile: name, name, password, confirmed: true },
+  }),
   lock: (token: string, keepalive = false) => request<{ ok: true }>('/lock', {
     method: 'POST', token, body: {}, keepalive,
   }),

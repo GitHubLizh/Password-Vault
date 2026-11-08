@@ -438,6 +438,43 @@ export function ConfirmDialog({ title, eyebrow, message, confirmLabel, busyLabel
   </Modal>;
 }
 
+// The login-page counterpart to the settings-page delete. No session exists, so two gates apply:
+// typing the profile name, plus a password that opens either the target vault or the default one.
+// A broken vault can never validate its own password, so only the default vault's path remains.
+export function DeleteProfileDialog({ profileName, broken = false, busy, error, onClose, onConfirm }: {
+  profileName: string; broken?: boolean; busy: boolean; error: string; onClose: () => void; onConfirm: (password: string) => void;
+}) {
+  const [confirmation, setConfirmation] = useState('');
+  const [password, setPassword] = useState('');
+  const [validation, setValidation] = useState('');
+  const id = useId();
+  useEffect(() => {
+    if (busy) setPassword('');
+  }, [busy]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    if (confirmation !== profileName) { setValidation('输入的名字与身份档名称不一致，请核对后重试。'); return; }
+    if (!password) { setValidation('请输入删除口令。'); return; }
+    onConfirm(password);
+  };
+  const warning = broken
+    ? `「${profileName}」的库文件已无法读取（可能已损坏），用它的主密码也验证不了。请输入默认身份档的主密码完成删除；删除前会在存储目录留下一份加密安全副本。`
+    : `将从这台机器删除「${profileName}」的密码库。需要输入该身份档的主密码才能删除；若已忘记，输入默认身份档的主密码也可以。删除前会在存储目录留下一份加密安全副本；哪天想起主密码，副本仍可解开。`;
+  return <Modal title="删除身份档" eyebrow="DELETE PROFILE" onClose={onClose} closeDisabled={busy} entryForm>
+    <form className="editor-form" onSubmit={submit} autoComplete="off" aria-busy={busy}>
+      <div className="modal-body">
+        <div className="message warning"><Icon name="trash" /><span>{warning}</span></div>
+        <div className="form-field"><label htmlFor={`${id}-confirm`}>输入身份档名称以确认</label><input id={`${id}-confirm`} type="text" value={confirmation} onChange={event => { setConfirmation(event.target.value); setValidation(''); }} placeholder={profileName} autoComplete="off" spellCheck={false} disabled={busy} /></div>
+        <div className="form-field secret"><div className="field-label-row"><label htmlFor={`${id}-password`}>删除口令</label><span className="secret-tag" aria-hidden="true"><Icon name="lock" size={11} />口令</span></div><input id={`${id}-password`} type="password" value={password} onChange={event => { setPassword(event.target.value); setValidation(''); }} autoComplete="new-password" spellCheck={false} maxLength={1024} required placeholder={broken ? '默认身份档的主密码' : '该身份档主密码，或默认身份档主密码'} disabled={busy} /></div>
+        <p className="field-hint">其他身份档不受影响。这不是找回通道：副本依然只认该档主密码，解不开就永远解不开。</p>
+        {(validation || error) && <ErrorMessage>{validation || error}</ErrorMessage>}
+      </div>
+      <footer className="modal-footer"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>取消</button><button className="button danger" type="submit" disabled={busy || confirmation !== profileName || !password}><Icon name="trash" size={17} />{busy ? '正在删除…' : '删除身份档'}</button></footer>
+    </form>
+  </Modal>;
+}
+
 export function EntryDetail({ entry, busy, onEdit, onDelete, onBack, focusOnOpen }: { entry: VaultEntry; busy: boolean; onEdit: () => void; onDelete: () => void; onBack: () => void; focusOnOpen: boolean }) {
   const articleRef = useRef<HTMLElement>(null);
   useEffect(() => {

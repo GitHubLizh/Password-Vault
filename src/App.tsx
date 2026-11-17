@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AutoLockMinutes, EntryInput, EntryType, ProfileSummary, SessionResponse, TrashedEntry, VaultEntry, VaultResponse, VaultStatus } from '../shared/types';
 import { api, ApiError } from './api';
-import { ChangeMasterPasswordDialog, ConfirmDialog, DeleteProfileDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, TrashDetail, typeNames } from './components';
+import { ChangeMasterPasswordDialog, ConfirmDialog, DeleteProfileDialog, EntryDetail, EntryEditor, ErrorMessage, Icon, RestoreDialog, StorageLocationDialog, TrashDetail, entryInput, typeNames } from './components';
 import type { IconName } from './components';
 
 type Category = 'all' | EntryType;
-type EditorState = { entry?: VaultEntry; type: EntryType; revision: number; reloaded: boolean };
+type EditorState = { entry?: VaultEntry; prefill?: EntryInput; type: EntryType; revision: number; reloaded: boolean };
 const sorted = (entries: VaultEntry[]) => [...entries].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.name.localeCompare(b.name, 'zh-CN'));
 const sortedTrash = (entries: TrashedEntry[]) => [...entries].sort((a, b) => b.deletedAt.localeCompare(a.deletedAt) || a.name.localeCompare(b.name, 'zh-CN'));
 const errorText = (error: unknown) => error instanceof Error ? error.message : '请求未完成，请重试。';
@@ -379,7 +379,7 @@ export default function App() {
       setCategory('all');
       setSearch('');
       setMobileDetail(true);
-      setNotice('条目已保存。');
+      setNotice(editor.prefill && !editor.entry ? '副本已保存为独立条目，原条目未改动。' : '条目已保存。');
     });
   };
   const removeEntry = (entry: VaultEntry) => {
@@ -602,6 +602,15 @@ export default function App() {
     setConflict(false);
     setEditor({ entry, type: entry?.type ?? (category === 'all' ? 'account' : category), revision: sessionRef.current?.vault.revision ?? 0, reloaded: false });
   };
+  const duplicateEntry = (entry: VaultEntry) => {
+    if (busyRef.current) return;
+    setError('');
+    setConflict(false);
+    const suffix = '（副本）';
+    const base = entryInput(entry);
+    const name = base.name.length + suffix.length > 120 ? base.name.slice(0, 120 - suffix.length) + suffix : base.name + suffix;
+    setEditor({ type: entry.type, revision: sessionRef.current?.vault.revision ?? 0, reloaded: false, prefill: { ...base, name } });
+  };
   const chooseCategory = (next: Category) => { setCategory(next); setView('vault'); setMobileDetail(false); };
   const backToList = () => {
     const version = epoch.current;
@@ -671,7 +680,7 @@ export default function App() {
           {view === 'vault' ? <div className="vault-columns"><section className="entry-list" aria-labelledby="list-title"><header className="list-header"><div><p className="eyebrow">YOUR COLLECTION</p><h1 id="list-title">{search ? '搜索结果' : category === 'all' ? '全部条目' : typeNames[category]}<span>{filtered.length}</span></h1></div><p><Icon name="clock" size={13} />最近修改排序</p></header>
             {filtered.length ? <ul className="entries">{filtered.map(entry => <li key={entry.id}><button className={`entry-row${selected?.id === entry.id ? ' selected' : ''}`} onClick={() => { setSelectedId(entry.id); setMobileDetail(true); }} aria-pressed={selected?.id === entry.id}><span className={`entry-emblem ${entry.type}`}><Icon name={entry.type} size={22} /></span><span className="entry-row-text"><strong>{entry.name}</strong><span>{entry.username || entry.address || typeNames[entry.type]}</span></span><span className="entry-row-end"><time dateTime={entry.updatedAt}>{new Date(entry.updatedAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</time><Icon name="chevron" size={14} /></span></button></li>)}</ul> : <div className="empty-state"><span className="round-icon"><Icon name={search ? 'search' : 'plus'} size={28} /></span><h2>{search ? '没有找到相关条目' : entries.length ? '这个分类还很安静' : '从第一条密码开始'}</h2><p>{search ? '试试名称、用户名或地址。搜索不会读取密码和备注。' : '把重要凭据收进来，下一次需要时，就在这里。'}</p>{search ? <button className="button secondary" onClick={() => setSearch('')}>清空搜索</button> : <button className="button primary" onClick={() => openEditor()} disabled={!!busy}><Icon name="plus" size={17} />添加条目</button>}{!search && !entries.length && <ol className="empty-steps"><li><span>1</span><div><strong>新建第一条凭据</strong><small>选好类型，填上名称和秘密即可。</small></div></li><li><span>2</span><div><strong>需要时查看或复制</strong><small>秘密默认隐藏，显示 30 秒后自动收起。</small></div></li><li><span>3</span><div><strong>定期导出加密备份</strong><small>在「设置与备份」中导出，存到安全的地方。</small></div></li></ol>}</div>}
             <footer className="list-footer"><Icon name="lock" size={13} />仅在解锁的会话中显示</footer>
-          </section><section className="detail-pane" aria-label="条目详情">{selected ? <EntryDetail key={`${selected.id}-${selected.updatedAt}`} entry={selected} busy={!!busy} onEdit={() => openEditor(selected)} onDelete={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setDeleteTarget(selected); }} onBack={backToList} focusOnOpen={mobileDetail} /> : <div className="detail-placeholder"><div className="placeholder-art"><Icon name="shield" size={48} /></div><p className="eyebrow">A LITTLE MORE PEACE OF MIND</p><h2>每一个秘密，都值得被保管</h2><p>从左侧选择一条记录，查看你的凭据。<br />没有条目时，可以先添加一个。</p><span><Icon name="lock" size={14} />本地保存，默认隐藏秘密</span></div>}</section></div> : view === 'trash' ? <div className="vault-columns"><section className="entry-list" aria-labelledby="trash-title"><header className="list-header"><div><p className="eyebrow">RECYCLE BIN</p><h1 id="trash-title">回收站<span>{trashItems.length}</span></h1></div><p><Icon name="clock" size={13} />保留 30 天</p></header>
+          </section><section className="detail-pane" aria-label="条目详情">{selected ? <EntryDetail key={`${selected.id}-${selected.updatedAt}`} entry={selected} busy={!!busy} onEdit={() => openEditor(selected)} onDuplicate={() => duplicateEntry(selected)} onDelete={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setDeleteTarget(selected); }} onBack={backToList} focusOnOpen={mobileDetail} /> : <div className="detail-placeholder"><div className="placeholder-art"><Icon name="shield" size={48} /></div><p className="eyebrow">A LITTLE MORE PEACE OF MIND</p><h2>每一个秘密，都值得被保管</h2><p>从左侧选择一条记录，查看你的凭据。<br />没有条目时，可以先添加一个。</p><span><Icon name="lock" size={14} />本地保存，默认隐藏秘密</span></div>}</section></div> : view === 'trash' ? <div className="vault-columns"><section className="entry-list" aria-labelledby="trash-title"><header className="list-header"><div><p className="eyebrow">RECYCLE BIN</p><h1 id="trash-title">回收站<span>{trashItems.length}</span></h1></div><p><Icon name="clock" size={13} />保留 30 天</p></header>
             {trashItems.length ? <ul className="entries">{trashItems.map(entry => <li key={entry.id}><button className={`entry-row${selectedTrash?.id === entry.id ? ' selected' : ''}`} onClick={() => { setSelectedTrashId(entry.id); setMobileDetail(true); }} aria-pressed={selectedTrash?.id === entry.id}><span className={`entry-emblem ${entry.type}`}><Icon name={entry.type} size={22} /></span><span className="entry-row-text"><strong>{entry.name}</strong><span>删除于 {new Date(entry.deletedAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span></span><span className="entry-row-end"><Icon name="chevron" size={14} /></span></button></li>)}</ul> : <div className="empty-state"><span className="round-icon"><Icon name="trash" size={28} /></span><h2>回收站是空的</h2><p>删除的条目会在这里保留 30 天，期间可以随时恢复。</p></div>}
             {trashItems.length > 0 && <button className="button danger-ghost" onClick={() => { if (busyRef.current || !isActive(epoch.current)) return; setError(''); setConflict(false); setEmptyTrashOpen(true); }} disabled={!!busy}><Icon name="trash" size={16} />清空回收站</button>}
             <footer className="list-footer"><Icon name="clock" size={13} />到期条目在下次解锁时自动清除</footer>
@@ -687,7 +696,7 @@ export default function App() {
         </main>
       </div><footer className="app-footer"><span><Icon name="shield" size={13} />本地优先，隐私为本</span><span>未保存的草稿会在锁定时丢弃</span></footer>
     </div>}
-    {editor && session && <EntryEditor entry={editor.entry} initialType={editor.type} busy={!!busy} error={error} conflict={conflict} reloaded={editor.reloaded} onClose={() => { setEditor(null); setError(''); setConflict(false); }} onSave={saveEntry} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
+    {editor && session && <EntryEditor entry={editor.entry} prefill={editor.prefill} initialType={editor.type} busy={!!busy} error={error} conflict={conflict} reloaded={editor.reloaded} onClose={() => { setEditor(null); setError(''); setConflict(false); }} onSave={saveEntry} onReload={reload} onLock={() => lock()} lockSeconds={seconds} />}
     {storageOpen && session && <StorageLocationDialog token={session.token} storagePath={status?.storagePath ?? ''} busy={!!busy} error={error} onClose={() => { if (!busyRef.current) { setStorageOpen(false); setError(''); } }} onSubmit={directory => void changeStorageLocation(directory)} onLock={() => lock()} lockSeconds={seconds} onFailure={cause => handleFailure(cause, currentEpoch)} onClearError={() => setError('')} />}
     {restoreOpen && <RestoreDialog token={session?.token} hasVault={status?.exists ?? false} onClose={() => setRestoreOpen(false)} onSuccess={result => installSession(result, currentEpoch)} onFailure={cause => handleFailure(cause, currentEpoch)} onLock={session ? () => lock() : undefined} lockSeconds={session ? seconds : undefined} />}
     {deleteProfileTarget && !session && <DeleteProfileDialog profileName={deleteProfileTarget.name} broken={deleteProfileTarget.broken === true} busy={authBusy} error={error} onClose={() => { if (!busyRef.current) { setDeleteProfileTarget(null); setError(''); } }} onConfirm={password => void deleteLockedProfile(deleteProfileTarget.name, password)} />}

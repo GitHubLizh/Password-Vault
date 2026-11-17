@@ -223,6 +223,7 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
 .entry-detail { padding: 25px 32px 32px; max-width: 820px; margin: 0 auto; }
 .entry-detail:focus { outline: none; }
 .detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.detail-actions { display: flex; gap: 8px; }
 .detail-toolbar .eyebrow { margin: 0; font-size: 8px; letter-spacing: .16em; color: var(--text-4); }
 .mobile-back { display: none; }
 .detail-identity { display: flex; flex-direction: column; align-items: flex-start; margin: 25px 0 25px; }
@@ -461,6 +462,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; ov
   .entry-detail { padding: 18px 23px 25px; }
   .mobile-back { display: inline-flex; font-size: 12px; }
   .desktop-only { display: none; }
+  .detail-actions .button { width: 36px; padding: 8px; }
+  .detail-actions .button > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
   .detail-identity { margin-top: 20px; }
   .detail-identity h2 { font-size: 25px; }
   .detail-field { min-height: 79px; }

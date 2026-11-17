@@ -85,11 +85,11 @@ function validateEntry(entry: EntryInput): string {
   return '';
 }
 
-export function EntryEditor({ entry, initialType, busy, error, conflict, reloaded, onClose, onSave, onReload, onLock, lockSeconds }: {
-  entry?: VaultEntry; initialType: EntryType; busy: boolean; error: string; conflict: boolean; reloaded: boolean;
+export function EntryEditor({ entry, prefill, initialType, busy, error, conflict, reloaded, onClose, onSave, onReload, onLock, lockSeconds }: {
+  entry?: VaultEntry; prefill?: EntryInput; initialType: EntryType; busy: boolean; error: string; conflict: boolean; reloaded: boolean;
   onClose: () => void; onSave: (entry: EntryInput) => void; onReload: () => void; onLock: () => void; lockSeconds: number;
 }) {
-  const [initial] = useState(() => entry ? entryInput(entry) : blankEntry(initialType));
+  const [initial] = useState(() => prefill ?? (entry ? entryInput(entry) : blankEntry(initialType)));
   const [draft, setDraft] = useState<EntryInput>(initial);
   const [validation, setValidation] = useState('');
   const id = useId();
@@ -115,10 +115,11 @@ export function EntryEditor({ entry, initialType, busy, error, conflict, reloade
     if (reloaded && entry && !window.confirm('最新密码库已重新载入。继续保存会用当前草稿替换这条记录，请确认已核对修改。')) return;
     onSave(draft);
   };
-  return <Modal title={entry ? '编辑条目' : '添加新条目'} eyebrow={entry ? 'EDIT ITEM' : 'NEW ITEM'} onClose={close} entryForm closeDisabled={busy} onLock={onLock} lockSeconds={lockSeconds}>
+  return <Modal title={entry ? '编辑条目' : prefill ? '复制条目' : '添加新条目'} eyebrow={entry ? 'EDIT ITEM' : prefill ? 'DUPLICATE ITEM' : 'NEW ITEM'} onClose={close} entryForm closeDisabled={busy} onLock={onLock} lockSeconds={lockSeconds}>
     <form className="editor-form" onSubmit={submit} autoComplete="off" aria-busy={busy}>
       <div className="modal-body">
         <div className="message subtle"><Icon name="lock" /><span>草稿仅暂存于本页。手动或自动锁定都会丢弃未保存的内容。</span></div>
+        {prefill && !entry && <div className="message subtle"><Icon name="copy" /><span>内容已带入原条目的全部字段。保存后创建一条独立的新条目，原条目不受影响。</span></div>}
         <fieldset className="type-picker" disabled={busy}><legend>条目类型</legend><div className="type-options">{(Object.keys(typeNames) as EntryType[]).map(type => <label className={draft.type === type ? 'type-option selected' : 'type-option'} key={type}><input type="radio" name={`${id}-type`} checked={draft.type === type} onChange={() => changeType(type)} /><Icon name={type} /><span>{typeNames[type]}</span></label>)}</div></fieldset>
         <p className="field-hint">切换类型将清空不适用字段。</p>
         {field('name', '名称', 120, { required: true, placeholder: '为这条凭据取一个容易找到的名字' })}
@@ -475,14 +476,14 @@ export function DeleteProfileDialog({ profileName, broken = false, busy, error, 
   </Modal>;
 }
 
-export function EntryDetail({ entry, busy, onEdit, onDelete, onBack, focusOnOpen }: { entry: VaultEntry; busy: boolean; onEdit: () => void; onDelete: () => void; onBack: () => void; focusOnOpen: boolean }) {
+export function EntryDetail({ entry, busy, onEdit, onDuplicate, onDelete, onBack, focusOnOpen }: { entry: VaultEntry; busy: boolean; onEdit: () => void; onDuplicate: () => void; onDelete: () => void; onBack: () => void; focusOnOpen: boolean }) {
   const articleRef = useRef<HTMLElement>(null);
   useEffect(() => {
     if (focusOnOpen && window.matchMedia('(max-width: 760px)').matches) articleRef.current?.focus();
   }, [focusOnOpen]);
   const date = (value: string) => new Date(value).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
   return <article ref={articleRef} tabIndex={-1} className="entry-detail" aria-label={`${entry.name}的详情`}>
-    <div className="detail-toolbar"><button className="button ghost mobile-back" onClick={onBack}><Icon name="back" size={17} />返回列表</button><span className="eyebrow desktop-only">ITEM DETAILS</span><button className="button secondary small" onClick={onEdit} disabled={busy}><Icon name="edit" size={16} />编辑条目</button></div>
+    <div className="detail-toolbar"><button className="button ghost mobile-back" onClick={onBack}><Icon name="back" size={17} />返回列表</button><span className="eyebrow desktop-only">ITEM DETAILS</span><span className="detail-actions"><button className="button secondary small" onClick={onEdit} disabled={busy}><Icon name="edit" size={16} /><span>编辑条目</span></button><button className="button secondary small" onClick={onDuplicate} disabled={busy}><Icon name="copy" size={16} /><span>复制条目</span></button></span></div>
     <div className="detail-identity"><span className={`entry-emblem large ${entry.type}`}><Icon name={entry.type} size={30} /></span><span className="type-badge">{typeNames[entry.type]}</span><h2>{entry.name}</h2><p>你的凭据，妥善保管在这里。</p></div>
     <div className="detail-fields">
       <DetailField label={entry.type === 'server' ? '主机地址' : '网站 / 服务地址'} value={entry.address} />

@@ -814,3 +814,47 @@ test('deletes a locked profile from the login page behind the name-and-password 
   await expect(page.locator('.auth-card .message')).toContainText('身份档「already-occupied」已删除');
   await expect(page.getByRole('button', { name: '草稿档', exact: true })).toBeVisible();
 });
+
+test('duplicates an entry into an independent copy and leaves the original untouched', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(origin);
+  await page.getByLabel('主密码', { exact: true }).fill(ROTATED);
+  await submitPassword(page, '解锁保管库');
+  await expect(page.getByRole('button', { name: '新增条目', exact: true })).toBeVisible();
+  const countBefore = await page.locator('.entry-row').count();
+  const originalRow = page.locator('.entry-row').filter({ has: page.locator('strong', { hasText: /^网站测试-已编辑$/ }) });
+  await originalRow.click();
+  await page.getByRole('button', { name: '复制条目', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: '复制条目', exact: true })).toBeVisible();
+  await expect(dialog).toContainText('原条目不受影响');
+  await expect(page.getByLabel('名称 *', { exact: true })).toHaveValue('网站测试-已编辑（副本）');
+  await expect(page.getByLabel('用户名 / 账号', { exact: true })).toHaveValue('demo-account');
+  await expect(page.getByLabel('网站 / 应用地址', { exact: true })).toHaveValue('https://example.invalid/login');
+  await expect(page.getByLabel('密码', { exact: true })).toHaveValue(ACCOUNT_SECRET);
+  await save(page, '网站测试-已编辑（副本）');
+  await expect(page.locator('.entry-row')).toHaveCount(countBefore + 1);
+  await expect(page.locator('.notice-bar')).toContainText('副本已保存');
+  await originalRow.click();
+  await expect(page.locator('.detail-identity h2')).toHaveText('网站测试-已编辑');
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: '复制条目', exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  // Cleanup so later fixture assumptions (entry counts) stay intact.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('.entry-row').filter({ hasText: '（副本）' }).click();
+  await page.getByRole('button', { name: '删除此条目', exact: true }).click();
+  await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
+  await expect(page.locator('.entry-row')).toHaveCount(countBefore);
+  await page.getByRole('button', { name: '回收站 1', exact: true }).click();
+  await page.getByRole('button', { name: '彻底删除', exact: true }).click();
+  await dialog.getByRole('button', { name: '彻底删除', exact: true }).click();
+  await expect(page.getByText('回收站是空的')).toBeVisible();
+  await page.getByRole('button', { name: `全部条目 ${countBefore}`, exact: true }).click();
+  await expect(page.locator('.entry-row')).toHaveCount(countBefore);
+});
